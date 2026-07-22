@@ -21,6 +21,7 @@
 - [项目开题文档](docs/项目开题文档.md)
 - [开发计划](docs/开发计划.md)
 - [里程碑与验收](docs/里程碑.md)
+- [与 xju-feiyue 的认证及部署集成](docs/认证与部署集成.md)
 - [项目库交互原型](docs/prototypes/02-editorial-list.html)
 - [前端设计参考：XjuSelab/xju-feiyue](https://github.com/XjuSelab/xju-feiyue)
 
@@ -28,10 +29,11 @@
 
 - 前端：React、TypeScript、pnpm、Vite、Tailwind CSS、shadcn/ui、TanStack Query、Zod
 - 后端：Rust、Axum、Tokio、SQLx、SQLite
+- 认证：复用 `xju-feiyue` 账号、JWT 与登录审计；飞跃超级管理员标记实验室成员
 - 文件：本地对象目录起步，保留 S3/MinIO 兼容接口
 - Agent：外部模型 API + 项目结构化数据检索，首期只读
 - Python：仅在必要时使用，依赖与执行统一由 uv 管理
-- 部署：4 核 8 GB Linux 服务器，Docker Compose，域名 `icthub.top`
+- 部署：`huawei2` 上沿用 systemd + Nginx，域名 `icthub.top`
 
 ## 计划目录
 
@@ -40,7 +42,7 @@ xju-icthub/
 ├── frontend/        实验室站点壳与各业务模块
 ├── backend/         Rust + Axum API
 ├── docs/            开题、架构、需求与部署文档
-├── deploy/          Docker Compose 与反向代理配置
+├── deploy/          systemd、Nginx 与部署脚本
 └── README.md
 ```
 
