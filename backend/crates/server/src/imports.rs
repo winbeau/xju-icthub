@@ -837,9 +837,9 @@ async fn claim_next_job(
 ) -> anyhow::Result<Option<(String, String)>> {
     let lease_modifier = format!("+{} seconds", options.lease_duration.as_secs());
     let claimed = sqlx::query_as::<_, (String, String)>(
-        "UPDATE import_jobs SET status = CASE WHEN status = 'agent_queued' THEN 'agent_running' ELSE 'normalizing' END,
-            stage = CASE WHEN status = 'agent_queued' THEN '启动 Codex 分析' ELSE '准备材料' END,
-            progress = CASE WHEN status = 'agent_queued' THEN 84 ELSE 10 END,
+        "UPDATE import_jobs SET status = CASE WHEN status IN ('agent_queued', 'agent_running') THEN 'agent_running' ELSE 'normalizing' END,
+            stage = CASE WHEN status IN ('agent_queued', 'agent_running') THEN '启动 Codex 分析' ELSE '准备材料' END,
+            progress = CASE WHEN status IN ('agent_queued', 'agent_running') THEN 84 ELSE 10 END,
             worker_id = ?, lease_expires_at = datetime('now', ?),
             last_heartbeat_at = CURRENT_TIMESTAMP, started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
             attempt_count = attempt_count + 1, error_message = NULL,

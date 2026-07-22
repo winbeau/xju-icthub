@@ -201,6 +201,19 @@ mod tests {
         assert!(result.validate().is_err());
     }
 
+    #[test]
+    fn embedded_output_schema_is_valid_json() {
+        let schema: serde_json::Value = serde_json::from_str(OUTPUT_SCHEMA).expect("schema JSON");
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(
+            schema["properties"]["primaryCategory"]["enum"]
+                .as_array()
+                .expect("category enum")
+                .len(),
+            5
+        );
+    }
+
     fn sample_result() -> AgentImportResult {
         AgentImportResult {
             project_name: "棉田智检".to_owned(),

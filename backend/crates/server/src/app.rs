@@ -544,6 +544,15 @@ mod tests {
         .expect("queued JSON");
         assert_eq!(queued["status"], "agent_queued");
 
+        sqlx::query(
+            "UPDATE import_jobs SET status = 'agent_running', worker_id = 'dead-agent-worker',
+                lease_expires_at = datetime('now', '-5 minutes') WHERE id = ?",
+        )
+        .bind(job_id)
+        .execute(&state.db)
+        .await
+        .expect("simulate expired agent lease");
+
         let worker = ImportWorkerOptions::new(50, 30);
         assert!(process_one_queued_job(&state, &worker)
             .await

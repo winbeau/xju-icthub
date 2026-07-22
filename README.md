@@ -18,13 +18,14 @@
 
 ## 当前阶段
 
-项目已经进入实现阶段。React/Rust 工程骨架、飞跃登录复用、简约项目列表与详情、项目创建/编辑/归档、资源维护、表格快速导入、SQLite 迁移和身份适配器已经落地；开发环境默认使用前端 mock 数据，便于在飞跃服务未启动时完整演示管理流程。
+项目已经进入实现阶段。React/Rust 工程骨架、飞跃登录复用、简约项目列表与详情、项目创建/编辑/归档、资源维护、表格快速导入、SQLite 迁移和身份适配器已经落地。一键导入现已具备持久化 Worker、Office/PDF/媒体抽取、清洗后的分析包，以及固定版本 Codex CLI 的结构化 Agent 运行器；真实模型调用仍需在服务器注入 Base URL、模型名和密钥文件后开启。
 
 - [项目开题文档](docs/项目开题文档.md)
 - [开发计划](docs/开发计划.md)
 - [里程碑与验收](docs/里程碑.md)
 - [与 xju-feiyue 的认证及部署集成](docs/认证与部署集成.md)
 - [xju-feiyue 前端复用记录](docs/前端复用记录.md)
+- [一键导入与 Codex Agent 计划](docs/一键导入原型计划.md)
 - [huawei2 部署说明](deploy/README.md)
 - [项目库交互原型](docs/prototypes/02-editorial-list.html)
 - [前端设计参考：XjuSelab/xju-feiyue](https://github.com/XjuSelab/xju-feiyue)
@@ -35,7 +36,7 @@
 - 后端：Rust、Axum、Tokio、SQLx、SQLite
 - 认证：复用 `xju-feiyue` 账号、JWT 与登录审计；飞跃超级管理员标记实验室成员
 - 文件：本地对象目录起步，保留 S3/MinIO 兼容接口
-- Agent：外部模型 API + 项目结构化数据检索，首期只读
+- Agent：固定版本 Codex CLI + 外部模型 API，使用清洗后的只读分析目录和严格 JSON Schema
 - Python：仅在必要时使用，依赖与执行统一由 uv 管理
 - 部署：`huawei2` 上沿用 systemd + Nginx，域名 `icthub.top`
 
@@ -71,7 +72,7 @@ cargo run -p icthub-server
 
 后端默认创建 `backend/data/icthub.db`，监听 `127.0.0.1:8003`。配置示例见 `backend/.env.example`。
 
-当前 API 提供公开项目列表与详情，以及受飞跃实验室成员身份保护的创建、编辑、归档和批量导入。批量导入接受前端校验后的结构化项目数组，使用单个 SQLite 事务按 `slug` 新增或更新。
+项目列表、详情、上传与导入 API 均要求飞跃登录且具有实验室成员身份；创建、编辑、归档和标签管理继续遵循成员、项目关系与管理员权限。批量导入接受前端校验后的结构化项目数组，使用单个 SQLite 事务按 `slug` 新增或更新。
 
 完整检查：
 
