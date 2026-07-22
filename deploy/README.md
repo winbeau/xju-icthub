@@ -42,10 +42,15 @@ curl --noproxy '*' -H 'Host: icthub.top' http://127.0.0.1/api/health
 
 ## 3. HTTPS
 
-先将 `icthub.top`（以及需要时的 `www.icthub.top`）A/AAAA 记录指向该服务器。DNS 生效并确认 HTTP 可访问后，再申请证书：
+先将 `icthub.top`（以及需要时的 `www.icthub.top`）A/AAAA 记录指向该服务器。DNS 生效并确认 HTTP 可访问后，使用 webroot 申请证书：
 
 ```bash
-sudo certbot --nginx -d icthub.top -d www.icthub.top
+sudo certbot certonly --webroot \
+  -w /home/winbeau/xju-icthub/frontend/dist \
+  -d icthub.top -d www.icthub.top
+sudo install -m 0644 deploy/nginx-icthub-https.conf /etc/nginx/sites-available/icthub
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
 若不使用 `www` 子域，只为主域申请证书并从 Nginx 的 `server_name` 中删除 `www.icthub.top`。
