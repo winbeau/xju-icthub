@@ -90,7 +90,7 @@ export function ImportProjectPage() {
     mutationFn: ({ id, value }: { id: string; value: string }) => saveImportRefinement(id, value),
     onSuccess: (saved) => {
       queryClient.setQueryData(['import-job', saved.id], saved)
-      toast.success('补充提示已保存，等待 Codex 接入')
+      toast.success(saved.status === 'agent_queued' ? '补充提示已保存，Codex 已排队' : '补充提示已保存，等待 Codex 配置')
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : '补充提示保存失败'),
   })

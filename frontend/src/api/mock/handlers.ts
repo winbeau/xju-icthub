@@ -294,6 +294,7 @@ registerMock('POST', '/api/v1/import-jobs', ({ body, headers }) => {
     startedAt: now,
     completedAt: now,
     analysisBundlePath: 'analysis/analysis-bundle.json',
+    agentThreadId: null,
     inputs: [
       ...files.map((file) => ({
         id: crypto.randomUUID(), inputKind: 'file' as const, provider: 'upload', displayName: file.name,
@@ -315,6 +316,7 @@ registerMock('POST', '/api/v1/import-jobs', ({ body, headers }) => {
       { id: 1, eventType: 'queued', status: 'queued', stage: '等待解析', progress: 5, message: '材料已保存，等待后台整理', createdAt: now },
       { id: 2, eventType: 'completed', status: 'completed', stage: '等待确认', progress: 100, message: '材料整理完成，项目草稿已生成', createdAt: now },
     ],
+    agentRuns: [],
     result: {
       projectDraft: {
         name: projectName, slug: `import-${id.slice(0, 8)}`,
@@ -329,6 +331,9 @@ registerMock('POST', '/api/v1/import-jobs', ({ body, headers }) => {
         status: '待确认',
       },
       artifactSummary: summarizeMockArtifacts(artifacts),
+      normalizedResources: {
+        sourceCode: [], documents: [], presentations: [], videos: [], links: [],
+      },
       warnings: ['当前使用确定性回退生成草稿；配置 Codex 后将补充语义摘要、奖项识别和更准确的分类。', 'PPT、文档和视频已完成文件级归类，内容抽取器将在 Agent 链路配置阶段接入。'],
       agent: { status: 'awaiting_configuration', mode: 'deterministic_fallback', message: '材料收集与安全归类链路已打通，等待配置 Codex Base URL 与 API Token。' },
       capabilities: { zipUpload: 'prototype_ready', githubLink: 'input_reserved', mixedFiles: 'prototype_ready', codexAgent: 'awaiting_configuration', githubPublish: 'awaiting_credentials' },
@@ -439,11 +444,11 @@ registerMock('POST', '/api/v1/import-jobs/:id/refine', ({ path, headers, body })
       sizeBytes: null, status: 'queued_codex',
     },
   ]
-  job.stage = '补充提示已保存，等待 Codex'
+  job.stage = '补充提示已保存，等待 Codex 配置'
   job.updatedAt = new Date().toISOString()
   job.events.push({
     id: job.events.length + 1, eventType: 'refinement_saved', status: 'completed',
-    stage: job.stage, progress: 100, message: '补充提示已加入任务上下文', createdAt: job.updatedAt,
+    stage: job.stage, progress: 100, message: '补充提示已加入任务上下文；配置 Codex 后即可运行', createdAt: job.updatedAt,
   })
   return job
 })

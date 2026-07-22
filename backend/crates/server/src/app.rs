@@ -54,9 +54,11 @@ async fn health() -> &'static str {
 mod tests {
     use std::{
         io::{Cursor, Write},
+        sync::Arc,
         time::Duration,
     };
 
+    use async_trait::async_trait;
     use axum::{
         body::{to_bytes, Body},
         http::{header, Request, StatusCode},
@@ -70,7 +72,13 @@ mod tests {
 
     use super::build_router;
     use crate::{
-        imports::{process_one_queued_job, ImportWorkerOptions},
+        imports::{
+            agent::{
+                AgentImportResult, AgentNormalizedResources, AgentResource, AgentRunOutcome,
+                AgentRunRequest, EvidencedValue, ImportAgentRunner,
+            },
+            process_one_queued_job, ImportWorkerOptions,
+        },
         state::AppState,
     };
 
@@ -460,6 +468,179 @@ mod tests {
         .await
         .expect("saved refinement");
         assert_eq!(saved_prompt, "负责人：张三\n来源：课程项目");
+    }
+
+    #[tokio::test]
+    async fn configured_agent_processes_refinement_and_persists_structured_result() {
+        let identity_url = spawn_identity_service().await;
+        let state = AppState::for_test_with_identity_url(&identity_url)
+            .await
+            .expect("test state")
+            .with_import_agent(Arc::new(FakeAgentRunner));
+        let job_id = "agent-refine-job";
+        let analysis_dir = state.import_root.join(job_id).join("analysis");
+        std::fs::create_dir_all(&analysis_dir).expect("analysis directory");
+        std::fs::write(
+            analysis_dir.join("analysis-bundle.json"),
+            br#"{"schemaVersion":"1.0","artifacts":[]}"#,
+        )
+        .expect("analysis bundle");
+        let fallback = json!({
+            "projectDraft": {
+                "name": "原始草稿", "slug": "original-draft", "summary": "本地整理草稿。",
+                "primaryCategory": "传统软件", "suggestedTags": [], "ownerName": null,
+                "sourceName": null, "highestAward": null, "status": "待确认"
+            },
+            "artifactSummary": [],
+            "normalizedResources": {
+                "sourceCode": [], "documents": [], "presentations": [], "videos": [], "links": []
+            },
+            "warnings": [],
+            "agent": {
+                "status": "awaiting_configuration", "mode": "deterministic_fallback",
+                "message": "等待配置"
+            },
+            "capabilities": {
+                "zipUpload": "prototype_ready", "githubLink": "input_reserved",
+                "mixedFiles": "prototype_ready", "codexAgent": "awaiting_configuration",
+                "githubPublish": "awaiting_credentials"
+            }
+        });
+        sqlx::query(
+            "INSERT INTO import_jobs (
+                id, status, stage, progress, source_kind, source_name, created_by_sid,
+                result_json, analysis_bundle_path, completed_at
+             ) VALUES (?, 'completed', '等待确认', 100, 'zip', 'agent.zip', '20211010001',
+                ?, 'analysis/analysis-bundle.json', CURRENT_TIMESTAMP)",
+        )
+        .bind(job_id)
+        .bind(fallback.to_string())
+        .execute(&state.db)
+        .await
+        .expect("agent job");
+        let app = build_router(state.clone());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/import-jobs/{job_id}/refine"))
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({ "prompt": "负责人：张三\n标签：计算机视觉" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("refine response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let queued: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), 128 * 1024)
+                .await
+                .expect("queued body"),
+        )
+        .expect("queued JSON");
+        assert_eq!(queued["status"], "agent_queued");
+
+        let worker = ImportWorkerOptions::new(50, 30);
+        assert!(process_one_queued_job(&state, &worker)
+            .await
+            .expect("agent worker"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/import-jobs/{job_id}"))
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("agent detail");
+        let detail: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), 256 * 1024)
+                .await
+                .expect("detail body"),
+        )
+        .expect("detail JSON");
+        assert_eq!(detail["status"], "completed");
+        assert_eq!(detail["analysisEngine"], "codex_exec");
+        assert_eq!(detail["agentThreadId"], "thread-fake-1");
+        assert_eq!(detail["result"]["projectDraft"]["name"], "棉田智检");
+        assert_eq!(
+            detail["result"]["projectDraft"]["suggestedTags"][0],
+            "计算机视觉"
+        );
+        assert_eq!(detail["agentRuns"][0]["status"], "completed");
+        assert_eq!(
+            detail["result"]["normalizedResources"]["documents"][0]["sourceRef"],
+            "docs/项目说明.pdf"
+        );
+    }
+
+    struct FakeAgentRunner;
+
+    #[async_trait]
+    impl ImportAgentRunner for FakeAgentRunner {
+        fn enabled(&self) -> bool {
+            true
+        }
+
+        fn runner_name(&self) -> &'static str {
+            "fake_codex_exec"
+        }
+
+        fn model_name(&self) -> Option<&str> {
+            Some("fake-model")
+        }
+
+        fn base_url_origin(&self) -> Option<String> {
+            Some("https://api.example.test".to_owned())
+        }
+
+        async fn run(&self, request: AgentRunRequest) -> anyhow::Result<AgentRunOutcome> {
+            let raw_events_path = request
+                .analysis_dir
+                .join(format!("agent-events-{}.jsonl", request.run_id));
+            tokio::fs::write(
+                &raw_events_path,
+                b"{\"type\":\"thread.started\",\"thread_id\":\"thread-fake-1\"}\n",
+            )
+            .await?;
+            Ok(AgentRunOutcome {
+                thread_id: Some("thread-fake-1".to_owned()),
+                raw_events_path,
+                result: AgentImportResult {
+                    project_name: "棉田智检".to_owned(),
+                    summary: "面向棉花病虫害识别的移动巡检平台。".to_owned(),
+                    primary_category: "AI 软件".to_owned(),
+                    suggested_tags: vec![EvidencedValue {
+                        value: "计算机视觉".to_owned(),
+                        evidence: "成员补充提示明确写出标签".to_owned(),
+                    }],
+                    owner: Some(EvidencedValue {
+                        value: "张三".to_owned(),
+                        evidence: "成员补充提示明确写出负责人".to_owned(),
+                    }),
+                    source: None,
+                    highest_award: None,
+                    resources: AgentNormalizedResources {
+                        source_code: Vec::new(),
+                        documents: vec![AgentResource {
+                            display_name: "项目说明".to_owned(),
+                            source_ref: "docs/项目说明.pdf".to_owned(),
+                            evidence: "分析包列出该 PDF".to_owned(),
+                            confidence: 1.0,
+                        }],
+                        presentations: Vec::new(),
+                        videos: Vec::new(),
+                        links: Vec::new(),
+                    },
+                    warnings: Vec::new(),
+                },
+            })
+        }
     }
 
     #[tokio::test]

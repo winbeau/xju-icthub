@@ -231,6 +231,7 @@ function workflowStep(job: ImportJob | undefined, submitting: boolean): number {
   if (!job) return 0
   if (job.status === 'failed') return job.progress >= 70 ? 3 : job.progress >= 15 ? 1 : 0
   if (job.status === 'completed') return 4
+  if (job.status === 'agent_running' || job.status === 'agent_queued') return 3
   if (job.status === 'analyzing') return 2
   if (job.status === 'extracting') return 1
   return job.progress >= 70 ? 3 : job.progress >= 15 ? 1 : 0

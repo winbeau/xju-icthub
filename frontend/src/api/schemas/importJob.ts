@@ -42,6 +42,34 @@ export const ImportJobEventSchema = z.object({
   createdAt: z.string(),
 })
 
+export const ImportAgentResourceSchema = z.object({
+  displayName: z.string(),
+  sourceRef: z.string(),
+  evidence: z.string(),
+  confidence: z.number().min(0).max(1),
+})
+
+export const ImportAgentResourcesSchema = z.object({
+  sourceCode: z.array(ImportAgentResourceSchema),
+  documents: z.array(ImportAgentResourceSchema),
+  presentations: z.array(ImportAgentResourceSchema),
+  videos: z.array(ImportAgentResourceSchema),
+  links: z.array(ImportAgentResourceSchema),
+})
+
+export const AgentRunSchema = z.object({
+  id: z.string(),
+  runner: z.string(),
+  model: z.string(),
+  baseUrlOrigin: z.string().nullable(),
+  status: z.string(),
+  rawEventsPath: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  startedAt: z.string().nullable(),
+  completedAt: z.string().nullable(),
+  createdAt: z.string(),
+})
+
 export const ImportAnalysisSchema = z.object({
   projectDraft: z.object({
     name: z.string(),
@@ -61,6 +89,7 @@ export const ImportAnalysisSchema = z.object({
       totalBytes: z.number().int().nonnegative(),
     }),
   ),
+  normalizedResources: ImportAgentResourcesSchema,
   warnings: z.array(z.string()),
   agent: z.object({
     status: z.string(),
@@ -91,9 +120,11 @@ export const ImportJobSchema = z.object({
   startedAt: z.string().nullable(),
   completedAt: z.string().nullable(),
   analysisBundlePath: z.string().nullable(),
+  agentThreadId: z.string().nullable(),
   inputs: z.array(ImportInputSchema),
   artifacts: z.array(ImportArtifactSchema),
   events: z.array(ImportJobEventSchema),
+  agentRuns: z.array(AgentRunSchema),
   result: ImportAnalysisSchema.nullable(),
 })
 

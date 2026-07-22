@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "projectName",
+    "summary",
+    "primaryCategory",
+    "suggestedTags",
+    "owner",
+    "source",
+    "highestAward",
+    "resources",
+    "warnings"
+  ],
+  "properties": {
+    "projectName": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "primaryCategory": {
+      "type": "string",
+      "enum": ["传统软件", "智能硬件", "AI 软件", "数字媒体", "研究成果"]
+    },
+    "suggestedTags": {
+      "type": "array",
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/evidencedValue" }
+    },
+    "owner": {
+      "anyOf": [{ "$ref": "#/$defs/evidencedValue" }, { "type": "null" }]
+    },
+    "source": {
+      "anyOf": [{ "$ref": "#/$defs/evidencedValue" }, { "type": "null" }]
+    },
+    "highestAward": {
+      "anyOf": [{ "$ref": "#/$defs/evidencedValue" }, { "type": "null" }]
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceCode", "documents", "presentations", "videos", "links"],
+      "properties": {
+        "sourceCode": { "type": "array", "items": { "$ref": "#/$defs/resource" } },
+        "documents": { "type": "array", "items": { "$ref": "#/$defs/resource" } },
+        "presentations": { "type": "array", "items": { "$ref": "#/$defs/resource" } },
+        "videos": { "type": "array", "items": { "$ref": "#/$defs/resource" } },
+        "links": { "type": "array", "items": { "$ref": "#/$defs/resource" } }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "maxItems": 30,
+      "items": { "type": "string", "maxLength": 500 }
+    }
+  },
+  "$defs": {
+    "evidencedValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "evidence"],
+      "properties": {
+        "value": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "evidence": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["displayName", "sourceRef", "evidence", "confidence"],
+      "properties": {
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "sourceRef": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "evidence": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}

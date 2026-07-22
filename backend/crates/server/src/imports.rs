@@ -21,8 +21,10 @@ use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::{auth::AuthContext, error::AppError, state::AppState};
 
+pub(crate) mod agent;
 mod extractors;
 
+use agent::{AgentImportResult, AgentNormalizedResources, AgentRunRequest};
 use extractors::{extract_artifact, generate_visual_preview};
 
 const MAX_ARCHIVE_ENTRIES: usize = 5_000;
@@ -61,9 +63,11 @@ pub struct ImportJobResponse {
     started_at: Option<String>,
     completed_at: Option<String>,
     analysis_bundle_path: Option<String>,
+    agent_thread_id: Option<String>,
     inputs: Vec<ImportInputView>,
     artifacts: Vec<ImportArtifactView>,
     events: Vec<ImportJobEventView>,
+    agent_runs: Vec<AgentRunView>,
     result: Option<ImportAnalysis>,
 }
 
@@ -122,6 +126,8 @@ struct ImportArtifactRow {
 struct ImportAnalysis {
     project_draft: ImportProjectDraft,
     artifact_summary: Vec<ArtifactSummary>,
+    #[serde(default)]
+    normalized_resources: AgentNormalizedResources,
     warnings: Vec<String>,
     agent: AgentState,
     capabilities: ImportCapabilities,
@@ -184,6 +190,22 @@ struct ImportJobRow {
     started_at: Option<String>,
     completed_at: Option<String>,
     analysis_bundle_path: Option<String>,
+    agent_thread_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct AgentRunView {
+    id: String,
+    runner: String,
+    model: String,
+    base_url_origin: Option<String>,
+    status: String,
+    raw_events_path: Option<String>,
+    error_message: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    created_at: String,
 }
 
 #[derive(Clone, Debug)]
@@ -605,21 +627,46 @@ pub async fn refine(
     .bind(sort_order)
     .execute(&state.db)
     .await?;
+    let (next_status, next_stage, next_progress, event_message) = if state.import_agent.enabled() {
+        (
+            "agent_queued",
+            "等待 Codex 分析",
+            82,
+            "补充提示已加入上下文，Codex 任务已经排队",
+        )
+    } else {
+        (
+            "completed",
+            "补充提示已保存，等待 Codex 配置",
+            100,
+            "补充提示已加入任务上下文；配置 Codex 后即可运行",
+        )
+    };
     sqlx::query(
-        "UPDATE import_jobs SET stage = '补充提示已保存，等待 Codex', updated_at = CURRENT_TIMESTAMP
+        "UPDATE import_jobs SET status = ?, stage = ?, progress = ?,
+            completed_at = CASE WHEN ? = 'completed' THEN completed_at ELSE NULL END,
+            error_message = NULL, updated_at = CURRENT_TIMESTAMP
          WHERE id = ? AND status = 'completed'",
     )
+    .bind(next_status)
+    .bind(next_stage)
+    .bind(next_progress)
+    .bind(next_status)
     .bind(&id)
     .execute(&state.db)
     .await?;
     insert_event(
         &state,
         &id,
-        "refinement_saved",
-        "completed",
-        "补充提示已保存，等待 Codex",
-        100,
-        Some("补充提示已加入任务上下文"),
+        if state.import_agent.enabled() {
+            "agent_queued"
+        } else {
+            "refinement_saved"
+        },
+        next_status,
+        next_stage,
+        next_progress,
+        Some(event_message),
     )
     .await?;
     Ok(Json(load_job(&state, &id).await?))
@@ -678,17 +725,27 @@ pub async fn process_one_queued_job(
     state: &AppState,
     options: &ImportWorkerOptions,
 ) -> anyhow::Result<bool> {
-    let Some(job_id) = claim_next_job(state, options).await? else {
+    let Some((job_id, claimed_status)) = claim_next_job(state, options).await? else {
         return Ok(false);
     };
+
+    let is_agent_job = claimed_status == "agent_running";
 
     insert_event(
         state,
         &job_id,
         "claimed",
-        "normalizing",
-        "准备材料",
-        10,
+        if is_agent_job {
+            "agent_running"
+        } else {
+            "normalizing"
+        },
+        if is_agent_job {
+            "启动 Codex 分析"
+        } else {
+            "准备材料"
+        },
+        if is_agent_job { 84 } else { 10 },
         Some(&format!("任务已由 {} 领取", options.worker_id)),
     )
     .await?;
@@ -728,12 +785,19 @@ pub async fn process_one_queued_job(
         tracing::error!(job_id = %job_id, error = %error, "import job failed");
         if !is_cancelled(state, &job_id).await? {
             let message = user_facing_worker_error(&error);
+            let (stage, event_status) = if is_agent_job {
+                ("Codex 分析失败，保留本地草稿", "completed")
+            } else {
+                ("解析失败", "failed")
+            };
             sqlx::query(
-                "UPDATE import_jobs SET status = 'failed', stage = '解析失败', progress = 100,
+                "UPDATE import_jobs SET status = ?, stage = ?, progress = 100,
                     error_message = ?, worker_id = NULL, lease_expires_at = NULL,
                     updated_at = CURRENT_TIMESTAMP, completed_at = CURRENT_TIMESTAMP
                  WHERE id = ? AND worker_id = ? AND status != 'cancelled'",
             )
+            .bind(event_status)
+            .bind(stage)
             .bind(&message)
             .bind(&job_id)
             .bind(&options.worker_id)
@@ -742,9 +806,13 @@ pub async fn process_one_queued_job(
             insert_event(
                 state,
                 &job_id,
-                "failed",
-                "failed",
-                "解析失败",
+                if is_agent_job {
+                    "agent_fallback"
+                } else {
+                    "failed"
+                },
+                event_status,
+                stage,
                 100,
                 Some(&message),
             )
@@ -766,10 +834,12 @@ pub async fn process_one_queued_job(
 async fn claim_next_job(
     state: &AppState,
     options: &ImportWorkerOptions,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<Option<(String, String)>> {
     let lease_modifier = format!("+{} seconds", options.lease_duration.as_secs());
-    let job_id = sqlx::query_scalar::<_, String>(
-        "UPDATE import_jobs SET status = 'normalizing', stage = '准备材料', progress = 10,
+    let claimed = sqlx::query_as::<_, (String, String)>(
+        "UPDATE import_jobs SET status = CASE WHEN status = 'agent_queued' THEN 'agent_running' ELSE 'normalizing' END,
+            stage = CASE WHEN status = 'agent_queued' THEN '启动 Codex 分析' ELSE '准备材料' END,
+            progress = CASE WHEN status = 'agent_queued' THEN 84 ELSE 10 END,
             worker_id = ?, lease_expires_at = datetime('now', ?),
             last_heartbeat_at = CURRENT_TIMESTAMP, started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
             attempt_count = attempt_count + 1, error_message = NULL,
@@ -777,21 +847,22 @@ async fn claim_next_job(
          WHERE id = (
             SELECT id FROM import_jobs
              WHERE status = 'queued'
+                OR status = 'agent_queued'
                 OR (
-                    status IN ('normalizing', 'extracting', 'indexing', 'analyzing')
+                    status IN ('normalizing', 'extracting', 'indexing', 'analyzing', 'agent_running')
                     AND lease_expires_at IS NOT NULL
                     AND lease_expires_at <= CURRENT_TIMESTAMP
                 )
              ORDER BY created_at ASC
              LIMIT 1
          ) AND status != 'cancelled'
-         RETURNING id",
+         RETURNING id, status",
     )
     .bind(&options.worker_id)
     .bind(lease_modifier)
     .fetch_optional(&state.db)
     .await?;
-    Ok(job_id)
+    Ok(claimed)
 }
 
 async fn process_claimed_job(
@@ -800,13 +871,16 @@ async fn process_claimed_job(
     worker_id: &str,
     lease_duration: Duration,
 ) -> anyhow::Result<()> {
-    let source_name = sqlx::query_scalar::<_, String>(
-        "SELECT source_name FROM import_jobs WHERE id = ? AND worker_id = ?",
+    let (source_name, status) = sqlx::query_as::<_, (String, String)>(
+        "SELECT source_name, status FROM import_jobs WHERE id = ? AND worker_id = ?",
     )
     .bind(job_id)
     .bind(worker_id)
     .fetch_one(&state.db)
     .await?;
+    if status == "agent_running" {
+        return process_agent_job(state, job_id, worker_id, lease_duration).await;
+    }
     let stored_files = sqlx::query_as::<_, StoredFileInput>(
         "SELECT id, display_name, local_path, mime_type, size_bytes, sha256
          FROM import_inputs WHERE job_id = ? AND input_kind = 'file'
@@ -868,6 +942,249 @@ async fn process_claimed_job(
         lease_duration,
     };
     process_job(state, &claim, &uploads, &analysis_name, &prompt, &links).await
+}
+
+async fn process_agent_job(
+    state: &AppState,
+    job_id: &str,
+    worker_id: &str,
+    lease_duration: Duration,
+) -> anyhow::Result<()> {
+    if !state.import_agent.enabled() {
+        bail!("Codex runner is disabled");
+    }
+    let refinement_prompt = sqlx::query_scalar::<_, String>(
+        "SELECT source_ref FROM import_inputs
+         WHERE job_id = ? AND input_kind = 'prompt' AND display_name = '整理补充提示'
+            AND source_ref IS NOT NULL
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(job_id)
+    .fetch_optional(&state.db)
+    .await?
+    .unwrap_or_default();
+    let job_dir = state.import_root.join(job_id);
+    let analysis_dir = job_dir.join("analysis");
+    let analysis_bundle_path = analysis_dir.join("analysis-bundle.json");
+    let bundle = tokio::fs::read(&analysis_bundle_path)
+        .await
+        .context("analysis bundle is missing before Codex run")?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bundle);
+    hasher.update(refinement_prompt.as_bytes());
+    let input_sha256 = format!("{:x}", hasher.finalize());
+    let run_id = Uuid::new_v4().to_string();
+    let model = state
+        .import_agent
+        .model_name()
+        .unwrap_or("configured-model")
+        .to_owned();
+    let base_url_origin = state.import_agent.base_url_origin();
+    sqlx::query(
+        "INSERT INTO agent_runs (
+            id, job_id, runner, model, base_url_origin, status, input_sha256, started_at
+         ) VALUES (?, ?, ?, ?, ?, 'running', ?, CURRENT_TIMESTAMP)",
+    )
+    .bind(&run_id)
+    .bind(job_id)
+    .bind(state.import_agent.runner_name())
+    .bind(&model)
+    .bind(base_url_origin)
+    .bind(input_sha256)
+    .execute(&state.db)
+    .await?;
+    update_progress(
+        state,
+        job_id,
+        worker_id,
+        lease_duration,
+        "agent_running",
+        "Codex 正在理解项目材料",
+        88,
+    )
+    .await?;
+
+    let request = AgentRunRequest {
+        run_id: run_id.clone(),
+        job_id: job_id.to_owned(),
+        analysis_dir: analysis_dir.clone(),
+        analysis_bundle_path: PathBuf::from("analysis-bundle.json"),
+        refinement_prompt,
+    };
+    let runner = state.import_agent.clone();
+    let run_future = runner.run(request);
+    tokio::pin!(run_future);
+    let outcome = loop {
+        tokio::select! {
+            result = &mut run_future => break Some(result),
+            _ = tokio::time::sleep(Duration::from_millis(500)) => {
+                if is_cancelled(state, job_id).await? {
+                    sqlx::query(
+                        "UPDATE agent_runs SET status = 'cancelled', error_message = NULL,
+                            completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                         WHERE id = ? AND status = 'running'",
+                    )
+                    .bind(&run_id)
+                    .execute(&state.db)
+                    .await?;
+                    break None;
+                }
+            }
+        }
+    };
+    let Some(outcome) = outcome else {
+        return Ok(());
+    };
+
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let message = user_facing_agent_error(&error);
+            tracing::warn!(job_id = %job_id, run_id = %run_id, reason = %message, "Codex analysis fell back to deterministic draft");
+            sqlx::query(
+                "UPDATE agent_runs SET status = 'failed', error_message = ?,
+                    completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?",
+            )
+            .bind(&message)
+            .bind(&run_id)
+            .execute(&state.db)
+            .await?;
+            let mut analysis = load_existing_analysis(state, job_id).await?;
+            analysis.warnings.push(message.clone());
+            analysis.agent = AgentState {
+                status: "fallback".to_owned(),
+                mode: "deterministic_fallback".to_owned(),
+                message: "Codex 本次未完成，已保留可编辑的本地整理草稿。".to_owned(),
+            };
+            let result_json = serde_json::to_string(&analysis)?;
+            sqlx::query(
+                "UPDATE import_jobs SET status = 'completed', stage = 'Codex 未完成，使用本地草稿',
+                    progress = 100, analysis_engine = 'deterministic_fallback', result_json = ?,
+                    error_message = NULL, worker_id = NULL, lease_expires_at = NULL,
+                    completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ? AND worker_id = ? AND status != 'cancelled'",
+            )
+            .bind(result_json)
+            .bind(job_id)
+            .bind(worker_id)
+            .execute(&state.db)
+            .await?;
+            insert_event(
+                state,
+                job_id,
+                "agent_fallback",
+                "completed",
+                "Codex 未完成，使用本地草稿",
+                100,
+                Some(&message),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    if is_cancelled(state, job_id).await? {
+        return Ok(());
+    }
+    update_progress(
+        state,
+        job_id,
+        worker_id,
+        lease_duration,
+        "agent_running",
+        "正在校验 Codex 草稿",
+        96,
+    )
+    .await?;
+    let mut analysis = load_existing_analysis(state, job_id).await?;
+    apply_agent_result(&mut analysis, outcome.result.clone(), job_id);
+    let result_json = serde_json::to_string(&analysis)?;
+    let agent_result_json = serde_json::to_string(&outcome.result)?;
+    let raw_events_path = outcome
+        .raw_events_path
+        .strip_prefix(&job_dir)
+        .map(path_for_json)
+        .unwrap_or_else(|_| path_for_json(&outcome.raw_events_path));
+    sqlx::query(
+        "UPDATE agent_runs SET status = 'completed', output_json = ?, raw_events_path = ?,
+            completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?",
+    )
+    .bind(&agent_result_json)
+    .bind(&raw_events_path)
+    .bind(&run_id)
+    .execute(&state.db)
+    .await?;
+    let completed = sqlx::query(
+        "UPDATE import_jobs SET status = 'completed', stage = '等待确认', progress = 100,
+            analysis_engine = 'codex_exec', result_json = ?, agent_result_json = ?,
+            agent_thread_id = ?, error_message = NULL, worker_id = NULL, lease_expires_at = NULL,
+            completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND worker_id = ? AND status != 'cancelled'",
+    )
+    .bind(result_json)
+    .bind(agent_result_json)
+    .bind(outcome.thread_id)
+    .bind(job_id)
+    .bind(worker_id)
+    .execute(&state.db)
+    .await?;
+    if completed.rows_affected() != 1 {
+        bail!("import job lease was lost before Codex completion");
+    }
+    sqlx::query(
+        "UPDATE import_inputs SET status = 'parsed_by_codex'
+         WHERE job_id = ? AND input_kind = 'prompt' AND display_name = '整理补充提示'",
+    )
+    .bind(job_id)
+    .execute(&state.db)
+    .await?;
+    insert_event(
+        state,
+        job_id,
+        "agent_completed",
+        "completed",
+        "等待确认",
+        100,
+        Some("Codex 已生成结构化项目草稿，等待成员确认"),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn load_existing_analysis(state: &AppState, job_id: &str) -> anyhow::Result<ImportAnalysis> {
+    let result_json = sqlx::query_scalar::<_, String>(
+        "SELECT result_json FROM import_jobs WHERE id = ? AND result_json IS NOT NULL",
+    )
+    .bind(job_id)
+    .fetch_one(&state.db)
+    .await?;
+    serde_json::from_str(&result_json).context("stored deterministic analysis is invalid")
+}
+
+fn apply_agent_result(analysis: &mut ImportAnalysis, result: AgentImportResult, job_id: &str) {
+    analysis.project_draft.name = result.project_name.trim().to_owned();
+    analysis.project_draft.slug = slugify(&analysis.project_draft.name, job_id);
+    analysis.project_draft.summary = result.summary.trim().to_owned();
+    analysis.project_draft.primary_category = result.primary_category;
+    analysis.project_draft.suggested_tags = result
+        .suggested_tags
+        .into_iter()
+        .map(|value| value.value)
+        .collect();
+    analysis.project_draft.owner_name = result.owner.map(|value| value.value);
+    analysis.project_draft.source_name = result.source.map(|value| value.value);
+    analysis.project_draft.highest_award = result.highest_award.map(|value| value.value);
+    analysis.project_draft.status = "待确认".to_owned();
+    analysis.normalized_resources = result.resources;
+    analysis.warnings = result.warnings;
+    analysis.agent = AgentState {
+        status: "completed".to_owned(),
+        mode: "codex_exec".to_owned(),
+        message: "Codex 已读取清洗后的分析包并生成结构化草稿。".to_owned(),
+    };
+    analysis.capabilities.codex_agent = "prototype_ready".to_owned();
 }
 
 async fn process_job(
@@ -1574,6 +1891,7 @@ fn build_fallback_analysis(
             status: "待确认".to_owned(),
         },
         artifact_summary,
+        normalized_resources: AgentNormalizedResources::default(),
         warnings,
         agent: AgentState {
             status: "awaiting_configuration".to_owned(),
@@ -1980,7 +2298,7 @@ async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResponse, AppEr
     let row = sqlx::query_as::<_, ImportJobRow>(
         "SELECT id, status, stage, progress, source_kind, source_name, analysis_engine,
                 result_json, error_message, created_at, updated_at, attempt_count,
-                started_at, completed_at, analysis_bundle_path
+                started_at, completed_at, analysis_bundle_path, agent_thread_id
          FROM import_jobs WHERE id = ?",
     )
     .bind(id)
@@ -1997,6 +2315,14 @@ async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResponse, AppEr
     let events = sqlx::query_as::<_, ImportJobEventView>(
         "SELECT id, event_type, status, stage, progress, message, created_at
          FROM import_job_events WHERE job_id = ? ORDER BY id ASC LIMIT 200",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+    let agent_runs = sqlx::query_as::<_, AgentRunView>(
+        "SELECT id, runner, model, base_url_origin, status, raw_events_path, error_message,
+                started_at, completed_at, created_at
+         FROM agent_runs WHERE job_id = ? ORDER BY created_at ASC",
     )
     .bind(id)
     .fetch_all(&state.db)
@@ -2046,9 +2372,11 @@ async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResponse, AppEr
         started_at: row.started_at,
         completed_at: row.completed_at,
         analysis_bundle_path: row.analysis_bundle_path,
+        agent_thread_id: row.agent_thread_id,
         inputs,
         artifacts,
         events,
+        agent_runs,
         result,
     })
 }
@@ -2065,6 +2393,21 @@ fn user_facing_worker_error(error: &anyhow::Error) -> String {
         "压缩包内文件数量超过限制".to_owned()
     } else {
         "解析失败，请检查压缩包后重试".to_owned()
+    }
+}
+
+fn user_facing_agent_error(error: &anyhow::Error) -> String {
+    let message = error.to_string().to_ascii_lowercase();
+    if message.contains("timed out") {
+        "Codex 分析超时，已保留本地整理草稿，可稍后重试。".to_owned()
+    } else if message.contains("api key file") {
+        "Codex 凭据文件不可用，已保留本地整理草稿。".to_owned()
+    } else if message.contains("failed to start") {
+        "Codex 运行程序不可用，已保留本地整理草稿。".to_owned()
+    } else if message.contains("structured final output") || message.contains("valid json") {
+        "Codex 返回的草稿格式不正确，已保留本地整理草稿。".to_owned()
+    } else {
+        "Codex 本次分析未完成，已保留本地整理草稿。".to_owned()
     }
 }
 

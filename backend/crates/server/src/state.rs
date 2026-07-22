@@ -5,7 +5,11 @@ use std::{
 
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 
-use crate::{auth::FeiyueIdentityClient, config::Config};
+use crate::{
+    auth::FeiyueIdentityClient,
+    config::Config,
+    imports::agent::{CodexExecConfig, CodexExecRunner, ImportAgentRunner},
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -17,6 +21,7 @@ pub struct AppState {
     pub ffprobe_bin: Arc<String>,
     pub ffmpeg_bin: Arc<String>,
     pub pdftoppm_bin: Arc<String>,
+    pub(crate) import_agent: Arc<dyn ImportAgentRunner>,
 }
 
 impl AppState {
@@ -40,6 +45,17 @@ impl AppState {
             .await?;
         sqlx::migrate!("../../migrations").run(&db).await?;
         std::fs::create_dir_all(&config.import_root)?;
+        std::fs::create_dir_all(&config.codex_home)?;
+
+        let import_agent = CodexExecRunner::new(CodexExecConfig {
+            enabled: config.codex_enabled,
+            binary: config.codex_bin.clone(),
+            codex_home: config.codex_home.clone(),
+            base_url: config.codex_base_url.clone(),
+            model: config.codex_model.clone(),
+            api_key_file: config.codex_api_key_file.clone(),
+            timeout: std::time::Duration::from_secs(config.codex_timeout_secs.max(30)),
+        })?;
 
         Ok(Self {
             db,
@@ -50,6 +66,7 @@ impl AppState {
             ffprobe_bin: Arc::new(config.ffprobe_bin.clone()),
             ffmpeg_bin: Arc::new(config.ffmpeg_bin.clone()),
             pdftoppm_bin: Arc::new(config.pdftoppm_bin.clone()),
+            import_agent: Arc::new(import_agent),
         })
     }
 
@@ -75,7 +92,14 @@ impl AppState {
             ffprobe_bin: Arc::new("ffprobe-not-installed-for-tests".to_owned()),
             ffmpeg_bin: Arc::new("ffmpeg-not-installed-for-tests".to_owned()),
             pdftoppm_bin: Arc::new("pdftoppm-not-installed-for-tests".to_owned()),
+            import_agent: Arc::new(CodexExecRunner::disabled()),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_import_agent(mut self, runner: Arc<dyn ImportAgentRunner>) -> Self {
+        self.import_agent = runner;
+        self
     }
 }
 
