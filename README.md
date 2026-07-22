@@ -19,15 +19,18 @@
 项目处于开题与架构设计阶段。项目库默认采用简约的“编辑部列表”：突出项目名称、内容简介、主类别与曾获奖，其他管理字段进入项目详情。
 
 - [项目开题文档](docs/项目开题文档.md)
+- [开发计划](docs/开发计划.md)
+- [里程碑与验收](docs/里程碑.md)
 - [项目库交互原型](docs/prototypes/02-editorial-list.html)
 - [前端设计参考：XjuSelab/xju-feiyue](https://github.com/XjuSelab/xju-feiyue)
 
 ## 初步技术方向
 
-- 前端：React、TypeScript、Vite、Tailwind CSS、shadcn/ui、TanStack Query、Zod
-- 后端：Rust、Axum、Tokio、SQLx、PostgreSQL
+- 前端：React、TypeScript、pnpm、Vite、Tailwind CSS、shadcn/ui、TanStack Query、Zod
+- 后端：Rust、Axum、Tokio、SQLx、SQLite
 - 文件：本地对象目录起步，保留 S3/MinIO 兼容接口
 - Agent：外部模型 API + 项目结构化数据检索，首期只读
+- Python：仅在必要时使用，依赖与执行统一由 uv 管理
 - 部署：4 核 8 GB Linux 服务器，Docker Compose，域名 `icthub.top`
 
 ## 计划目录
