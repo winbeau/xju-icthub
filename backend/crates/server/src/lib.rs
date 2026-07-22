@@ -1,9 +1,11 @@
 mod app;
 mod auth;
 mod config;
+mod covers;
 mod error;
 mod projects;
 mod state;
+mod tags;
 
 pub use app::build_router;
 pub use config::Config;

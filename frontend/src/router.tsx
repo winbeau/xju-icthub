@@ -8,6 +8,7 @@ import { NotFoundPage } from '@/pages/NotFoundPage'
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
 import { ProjectEditorPage } from '@/pages/ProjectEditorPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
+import { TagManagementPage } from '@/pages/TagManagementPage'
 
 export const router: ReturnType<typeof createBrowserRouter> = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
@@ -24,6 +25,7 @@ export const router: ReturnType<typeof createBrowserRouter> = createBrowserRoute
       { path: '/admin/projects', element: <AdminProjectsPage /> },
       { path: '/admin/projects/new', element: <ProjectEditorPage /> },
       { path: '/admin/projects/:slug/edit', element: <ProjectEditorPage /> },
+      { path: '/admin/tags', element: <TagManagementPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

@@ -5,15 +5,18 @@ import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { archiveProject, importProjects, listProjects } from '@/api/endpoints/projects'
 import type { ProjectWriteInput } from '@/api/schemas/project'
+import { canManageTags } from '@/api/schemas/user'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { categoryColor } from '@/lib/projects'
 import { parseProjectImport } from '@/lib/projectImport'
+import { useAuthStore } from '@/stores/authStore'
 
 const IMPORT_EXAMPLE = `项目路径\t项目名\t类别\t简介\t曾获奖\t状态\t负责人\t来源\t标签\tgh链接\t百度网盘链接
-lab-portal\t实验室门户\t工具项目\t统一实验室日常入口。\t\t研发中\t基础设施组\t内部需求\t软件|Web\thttps://github.com/example/repo\t`
+lab-portal\t实验室门户\t传统软件\t统一实验室日常入口。\t\t研发中\t基础设施组\t内部需求\tWeb|实验室建设\thttps://github.com/example/repo\t`
 
 export function AdminProjectsPage() {
+  const user = useAuthStore((state) => state.user)
   const queryClient = useQueryClient()
   const [showImport, setShowImport] = useState(false)
   const [importText, setImportText] = useState('')
@@ -60,9 +63,10 @@ export function AdminProjectsPage() {
             ICTHub / Manage
           </p>
           <h1 className="mt-3 font-serif text-3xl font-semibold tracking-[-0.02em]">项目管理</h1>
-          <p className="mt-2 text-sm text-text-muted">新增、修订和归档实验室项目。</p>
+          <p className="mt-2 text-base text-text-muted">上传、修订和归档实验室项目。</p>
         </div>
         <div className="flex gap-2">
+          {canManageTags(user) && <Button asChild variant="ghost"><Link to="/admin/tags">标签管理</Link></Button>}
           <Button variant="outline" onClick={() => setShowImport((value) => !value)}>
             <FileUp aria-hidden />
             快速导入
@@ -70,7 +74,7 @@ export function AdminProjectsPage() {
           <Button asChild>
             <Link to="/admin/projects/new">
               <Plus aria-hidden />
-              新建项目
+              上传项目
             </Link>
           </Button>
         </div>
@@ -191,7 +195,7 @@ export function AdminProjectsPage() {
         ))}
         {projects.data?.items.length === 0 && (
           <p className="border-b border-border py-14 text-sm text-text-muted">
-            还没有项目，可以新建或从表格导入。
+            还没有项目，可以上传或从表格导入。
           </p>
         )}
       </section>

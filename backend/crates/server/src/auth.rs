@@ -74,6 +74,10 @@ impl FeiyueIdentity {
     pub fn can_manage_projects(&self) -> bool {
         self.can_access_icthub()
     }
+
+    pub fn can_manage_tags(&self) -> bool {
+        self.is_admin || self.is_superadmin() || self.role == "admin"
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -126,5 +130,7 @@ mod tests {
         assert!(!identity("user", false).can_access_icthub());
         assert!(identity("user", true).can_access_icthub());
         assert!(identity("superadmin", false).can_access_icthub());
+        assert!(!identity("user", true).can_manage_tags());
+        assert!(identity("admin", true).can_manage_tags());
     }
 }

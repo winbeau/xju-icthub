@@ -28,7 +28,7 @@ export function AppShell() {
               <Button asChild size="sm" className="hidden sm:inline-flex">
                 <Link to="/admin/projects/new">
                   <Plus aria-hidden />
-                  新建项目
+                  上传项目
                 </Link>
               </Button>
             )}

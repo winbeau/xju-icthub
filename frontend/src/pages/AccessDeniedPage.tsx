@@ -22,7 +22,7 @@ export function AccessDeniedPage() {
         </p>
         <h1 className="mt-3 font-serif text-3xl font-semibold tracking-[-0.02em]">暂无访问权限</h1>
         <p className="mx-auto mt-4 max-w-md text-lg leading-8 text-text-muted">
-          当前账号尚未被标记为实验室成员，请联系实验室管理员开通权限。
+          当前账号尚未开通实验室权限，请联系管理员
         </p>
         {user && (
           <p className="mt-3 text-sm text-text-faint">

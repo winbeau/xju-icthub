@@ -1,11 +1,11 @@
 import type { ProjectCategory, ProjectSummary } from '@/api/schemas/project'
 
 export const PROJECT_CATEGORIES: readonly ProjectCategory[] = [
-  '互联网+',
-  '计算机设计大赛',
-  '论文',
-  '工具项目',
-  '其他',
+  '传统软件',
+  '智能硬件',
+  'AI 软件',
+  '数字媒体',
+  '研究成果',
 ]
 
 export function filterProjects(
@@ -25,15 +25,15 @@ export function filterProjects(
 
 export function categoryColor(category: ProjectCategory): string {
   switch (category) {
-    case '互联网+':
-      return 'var(--cat-internet)'
-    case '计算机设计大赛':
-      return 'var(--cat-design)'
-    case '论文':
-      return 'var(--cat-paper)'
-    case '工具项目':
-      return 'var(--cat-tools)'
-    case '其他':
-      return 'var(--cat-other)'
+    case '传统软件':
+      return 'var(--cat-software)'
+    case '智能硬件':
+      return 'var(--cat-hardware)'
+    case 'AI 软件':
+      return 'var(--cat-ai)'
+    case '数字媒体':
+      return 'var(--cat-media)'
+    case '研究成果':
+      return 'var(--cat-research)'
   }
 }

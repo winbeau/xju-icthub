@@ -11,12 +11,23 @@ use uuid::Uuid;
 
 use crate::{
     auth::{AuthContext, FeiyueIdentity},
+    covers,
     error::AppError,
     state::AppState,
 };
 
-const PROJECT_CATEGORIES: &[&str] = &["互联网+", "计算机设计大赛", "论文", "工具项目", "其他"];
-const RESOURCE_TYPES: &[&str] = &["github", "baidu", "document", "archive", "video", "link"];
+pub const PROJECT_CATEGORIES: &[&str] =
+    &["传统软件", "智能硬件", "AI 软件", "数字媒体", "研究成果"];
+const RESOURCE_TYPES: &[&str] = &[
+    "github",
+    "baidu",
+    "document",
+    "presentation",
+    "archive",
+    "video",
+    "image",
+    "link",
+];
 
 #[derive(Debug, Deserialize)]
 pub struct ProjectListQuery {
@@ -24,7 +35,26 @@ pub struct ProjectListQuery {
     pub category: Option<String>,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, FromRow)]
+struct ProjectSummaryRow {
+    id: String,
+    slug: String,
+    name: String,
+    summary: String,
+    primary_category: String,
+    highest_award: Option<String>,
+    status: String,
+    cover_mode: String,
+    cover_resource_id: Option<String>,
+    cover_resource_url: Option<String>,
+    cover_title: Option<String>,
+    cover_subtitle: Option<String>,
+    cover_keywords: String,
+    cover_tone: String,
+    cover_confidence: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSummary {
     pub id: String,
@@ -34,6 +64,15 @@ pub struct ProjectSummary {
     pub primary_category: String,
     pub highest_award: Option<String>,
     pub status: String,
+    pub tags: Vec<String>,
+    pub cover_mode: String,
+    pub cover_resource_id: Option<String>,
+    pub cover_resource_url: Option<String>,
+    pub cover_title: String,
+    pub cover_subtitle: String,
+    pub cover_keywords: Vec<String>,
+    pub cover_tone: String,
+    pub cover_confidence: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -68,6 +107,16 @@ pub struct ProjectWriteInput {
     pub tags: Vec<String>,
     #[serde(default)]
     pub resources: Vec<ProjectResourceInput>,
+    #[serde(default)]
+    pub cover_mode: Option<String>,
+    #[serde(default)]
+    pub cover_title: Option<String>,
+    #[serde(default)]
+    pub cover_subtitle: Option<String>,
+    #[serde(default)]
+    pub cover_keywords: Vec<String>,
+    #[serde(default)]
+    pub cover_tone: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,16 +146,25 @@ pub struct ProjectResource {
 
 #[derive(Debug, FromRow)]
 struct ProjectDetailRow {
-    pub id: String,
-    pub slug: String,
-    pub name: String,
-    pub summary: String,
-    pub primary_category: String,
-    pub highest_award: Option<String>,
-    pub status: String,
-    pub critique: String,
-    pub owner_name: Option<String>,
-    pub source_name: Option<String>,
+    id: String,
+    slug: String,
+    name: String,
+    summary: String,
+    primary_category: String,
+    classification_status: String,
+    highest_award: Option<String>,
+    status: String,
+    critique: String,
+    owner_name: Option<String>,
+    source_name: Option<String>,
+    cover_mode: String,
+    cover_resource_id: Option<String>,
+    cover_resource_url: Option<String>,
+    cover_title: Option<String>,
+    cover_subtitle: Option<String>,
+    cover_keywords: String,
+    cover_tone: String,
+    cover_confidence: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,6 +175,7 @@ pub struct ProjectDetail {
     pub name: String,
     pub summary: String,
     pub primary_category: String,
+    pub classification_status: String,
     pub highest_award: Option<String>,
     pub status: String,
     pub critique: String,
@@ -124,6 +183,14 @@ pub struct ProjectDetail {
     pub source_name: Option<String>,
     pub resources: Vec<ProjectResource>,
     pub tags: Vec<String>,
+    pub cover_mode: String,
+    pub cover_resource_id: Option<String>,
+    pub cover_resource_url: Option<String>,
+    pub cover_title: String,
+    pub cover_subtitle: String,
+    pub cover_keywords: Vec<String>,
+    pub cover_tone: String,
+    pub cover_confidence: f64,
 }
 
 pub async fn list(
@@ -132,31 +199,50 @@ pub async fn list(
     Query(query): Query<ProjectListQuery>,
 ) -> Result<Json<ProjectListResponse>, AppError> {
     require_member(&identity)?;
-    let mut items = sqlx::query_as::<_, ProjectSummary>(
-        "SELECT id, slug, name, summary, primary_category, highest_award, status
-         FROM projects WHERE archived_at IS NULL ORDER BY updated_at DESC, name ASC",
+    if let Some(category) = query.category.as_deref() {
+        if !PROJECT_CATEGORIES.contains(&category) {
+            return Err(AppError::BadRequest("项目类别不受支持".to_owned()));
+        }
+    }
+
+    let rows = sqlx::query_as::<_, ProjectSummaryRow>(
+        "SELECT p.id, p.slug, p.name, p.summary, p.primary_category, p.highest_award, p.status,
+                p.cover_mode, p.cover_resource_id,
+                (SELECT url FROM resources r WHERE r.id = p.cover_resource_id) cover_resource_url,
+                p.cover_title, p.cover_subtitle, p.cover_keywords, p.cover_tone, p.cover_confidence
+         FROM projects p
+         WHERE p.archived_at IS NULL AND p.classification_status = 'classified'
+         ORDER BY p.updated_at DESC, p.name ASC",
     )
     .fetch_all(&state.db)
     .await?;
 
-    if let Some(category) = query.category {
-        items.retain(|item| item.primary_category == category);
-    }
-    if let Some(needle) = query
+    let needle = query
         .q
         .map(|value| value.trim().to_lowercase())
-        .filter(|value| !value.is_empty())
-    {
-        items.retain(|item| {
-            format!(
+        .filter(|value| !value.is_empty());
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        if query
+            .category
+            .as_deref()
+            .is_some_and(|category| category != row.primary_category)
+        {
+            continue;
+        }
+        if needle.as_deref().is_some_and(|needle| {
+            !format!(
                 "{} {} {}",
-                item.name,
-                item.summary,
-                item.highest_award.as_deref().unwrap_or("")
+                row.name,
+                row.summary,
+                row.highest_award.as_deref().unwrap_or("")
             )
             .to_lowercase()
-            .contains(&needle)
-        });
+            .contains(needle)
+        }) {
+            continue;
+        }
+        items.push(summary_from_row(&state, row).await?);
     }
 
     let total = items.len();
@@ -179,13 +265,15 @@ pub async fn create(
 ) -> Result<(StatusCode, Json<ProjectDetail>), AppError> {
     require_member(&identity)?;
     let input = input.normalized()?;
+    validate_tags(&state, &input.tags).await?;
     let mut tx = state.db.begin().await?;
 
-    let exists = sqlx::query_scalar::<_, String>("SELECT id FROM projects WHERE slug = ?")
+    if sqlx::query_scalar::<_, String>("SELECT id FROM projects WHERE slug = ?")
         .bind(&input.slug)
         .fetch_optional(&mut *tx)
-        .await?;
-    if exists.is_some() {
+        .await?
+        .is_some()
+    {
         return Err(AppError::Conflict(format!(
             "项目路径 {} 已存在",
             input.slug
@@ -196,9 +284,13 @@ pub async fn create(
     insert_project(&mut tx, &id, &input, &identity.sid).await?;
     replace_children(&mut tx, &id, &input, &identity.sid).await?;
     tx.commit().await?;
-
-    let project = load_detail(&state, &input.slug).await?;
-    Ok((StatusCode::CREATED, Json(project)))
+    if input.cover_mode.as_deref() != Some("manual") {
+        covers::generate_for_slug(&state, &input.slug, false).await?;
+    }
+    Ok((
+        StatusCode::CREATED,
+        Json(load_detail(&state, &input.slug).await?),
+    ))
 }
 
 pub async fn update(
@@ -209,8 +301,8 @@ pub async fn update(
 ) -> Result<Json<ProjectDetail>, AppError> {
     require_member(&identity)?;
     let input = input.normalized()?;
+    validate_tags(&state, &input.tags).await?;
     let mut tx = state.db.begin().await?;
-
     let id = sqlx::query_scalar::<_, String>(
         "SELECT id FROM projects WHERE slug = ? AND archived_at IS NULL",
     )
@@ -218,22 +310,24 @@ pub async fn update(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(AppError::NotFound)?;
-
-    let slug_owner = sqlx::query_scalar::<_, String>("SELECT id FROM projects WHERE slug = ?")
+    if sqlx::query_scalar::<_, String>("SELECT id FROM projects WHERE slug = ?")
         .bind(&input.slug)
         .fetch_optional(&mut *tx)
-        .await?;
-    if slug_owner.as_deref().is_some_and(|owner| owner != id) {
+        .await?
+        .as_deref()
+        .is_some_and(|owner| owner != id)
+    {
         return Err(AppError::Conflict(format!(
             "项目路径 {} 已存在",
             input.slug
         )));
     }
-
     update_project(&mut tx, &id, &input).await?;
     replace_children(&mut tx, &id, &input, &identity.sid).await?;
     tx.commit().await?;
-
+    if input.cover_mode.as_deref() != Some("manual") {
+        covers::generate_for_slug(&state, &input.slug, false).await?;
+    }
     Ok(Json(load_detail(&state, &input.slug).await?))
 }
 
@@ -279,6 +373,7 @@ pub async fn import(
                 item.slug
             )));
         }
+        validate_tags(&state, &item.tags).await?;
         items.push(item);
     }
 
@@ -286,11 +381,11 @@ pub async fn import(
     let mut updated = 0;
     let mut tx = state.db.begin().await?;
     for input in &items {
-        let existing = sqlx::query_scalar::<_, String>("SELECT id FROM projects WHERE slug = ?")
+        if let Some(id) = sqlx::query_scalar::<_, String>("SELECT id FROM projects WHERE slug = ?")
             .bind(&input.slug)
             .fetch_optional(&mut *tx)
-            .await?;
-        if let Some(id) = existing {
+            .await?
+        {
             update_project(&mut tx, &id, input).await?;
             replace_children(&mut tx, &id, input, &identity.sid).await?;
             updated += 1;
@@ -302,7 +397,11 @@ pub async fn import(
         }
     }
     tx.commit().await?;
-
+    for input in &items {
+        if input.cover_mode.as_deref() != Some("manual") {
+            covers::generate_for_slug(&state, &input.slug, false).await?;
+        }
+    }
     Ok(Json(ProjectImportResponse {
         created,
         updated,
@@ -329,6 +428,10 @@ impl ProjectWriteInput {
         self.highest_award = normalize_optional(self.highest_award);
         self.owner_name = normalize_optional(self.owner_name);
         self.source_name = normalize_optional(self.source_name);
+        self.cover_mode = normalize_optional(self.cover_mode).map(|value| value.to_lowercase());
+        self.cover_title = normalize_optional(self.cover_title);
+        self.cover_subtitle = normalize_optional(self.cover_subtitle);
+        self.cover_tone = normalize_optional(self.cover_tone);
 
         if self.name.is_empty() || self.summary.is_empty() {
             return Err(AppError::BadRequest("项目名和简介不能为空".to_owned()));
@@ -347,6 +450,13 @@ impl ProjectWriteInput {
         if self.status.is_empty() {
             return Err(AppError::BadRequest("项目状态不能为空".to_owned()));
         }
+        if self
+            .cover_mode
+            .as_deref()
+            .is_some_and(|mode| !["manual", "resource", "text"].contains(&mode))
+        {
+            return Err(AppError::BadRequest("封面模式不受支持".to_owned()));
+        }
 
         let mut seen_tags = HashSet::new();
         self.tags = self
@@ -356,6 +466,13 @@ impl ProjectWriteInput {
             .filter(|tag| !tag.is_empty())
             .filter(|tag| seen_tags.insert(tag.to_lowercase()))
             .take(20)
+            .collect();
+        self.cover_keywords = self
+            .cover_keywords
+            .into_iter()
+            .map(|keyword| keyword.trim().to_owned())
+            .filter(|keyword| !keyword.is_empty())
+            .take(3)
             .collect();
 
         for resource in &mut self.resources {
@@ -374,6 +491,23 @@ impl ProjectWriteInput {
         }
         Ok(self)
     }
+}
+
+async fn validate_tags(state: &AppState, tags: &[String]) -> Result<(), AppError> {
+    for tag in tags {
+        let exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM tag_definitions WHERE name = ? COLLATE NOCASE AND is_active = 1",
+        )
+        .bind(tag)
+        .fetch_one(&state.db)
+        .await?;
+        if exists == 0 {
+            return Err(AppError::BadRequest(format!(
+                "标签“{tag}”不是启用中的正式标签，请先提交标签建议"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn normalize_optional(value: Option<String>) -> Option<String> {
@@ -400,9 +534,10 @@ async fn insert_project(
 ) -> Result<(), AppError> {
     sqlx::query(
         "INSERT INTO projects (
-            id, slug, name, summary, primary_category, status, critique, highest_award,
-            owner_name, source_name, created_by_sid
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            id, slug, name, summary, primary_category, classification_status, status, critique,
+            highest_award, owner_name, source_name, created_by_sid, cover_mode, cover_title,
+            cover_subtitle, cover_keywords, cover_tone
+         ) VALUES (?, ?, ?, ?, ?, 'classified', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(&input.slug)
@@ -415,6 +550,11 @@ async fn insert_project(
     .bind(&input.owner_name)
     .bind(&input.source_name)
     .bind(actor_sid)
+    .bind(input.cover_mode.as_deref().unwrap_or("text"))
+    .bind(&input.cover_title)
+    .bind(&input.cover_subtitle)
+    .bind(serde_json::to_string(&input.cover_keywords).unwrap_or_else(|_| "[]".to_owned()))
+    .bind(input.cover_tone.as_deref().unwrap_or("slate"))
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -426,11 +566,11 @@ async fn update_project(
     input: &ProjectWriteInput,
 ) -> Result<(), AppError> {
     sqlx::query(
-        "UPDATE projects SET
-            slug = ?, name = ?, summary = ?, primary_category = ?, status = ?, critique = ?,
-            highest_award = ?, owner_name = ?, source_name = ?, updated_at = CURRENT_TIMESTAMP,
-            archived_at = NULL
-         WHERE id = ?",
+        "UPDATE projects SET slug = ?, name = ?, summary = ?, primary_category = ?,
+            classification_status = 'classified', status = ?, critique = ?, highest_award = ?,
+            owner_name = ?, source_name = ?, cover_mode = ?, cover_resource_id = NULL,
+            cover_title = ?, cover_subtitle = ?, cover_keywords = ?, cover_tone = ?,
+            updated_at = CURRENT_TIMESTAMP, archived_at = NULL WHERE id = ?",
     )
     .bind(&input.slug)
     .bind(&input.name)
@@ -441,6 +581,11 @@ async fn update_project(
     .bind(&input.highest_award)
     .bind(&input.owner_name)
     .bind(&input.source_name)
+    .bind(input.cover_mode.as_deref().unwrap_or("text"))
+    .bind(&input.cover_title)
+    .bind(&input.cover_subtitle)
+    .bind(serde_json::to_string(&input.cover_keywords).unwrap_or_else(|_| "[]".to_owned()))
+    .bind(input.cover_tone.as_deref().unwrap_or("slate"))
     .bind(id)
     .execute(&mut **tx)
     .await?;
@@ -463,58 +608,36 @@ async fn replace_children(
         .await?;
 
     for (index, tag) in input.tags.iter().enumerate() {
-        sqlx::query("INSERT INTO project_tags (project_id, tag, sort_order) VALUES (?, ?, ?)")
-            .bind(project_id)
-            .bind(tag)
-            .bind(index as i64)
-            .execute(&mut **tx)
-            .await?;
+        let definition_id = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM tag_definitions WHERE name = ? COLLATE NOCASE AND is_active = 1",
+        )
+        .bind(tag)
+        .fetch_one(&mut **tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO project_tags (project_id, tag, sort_order, tag_definition_id) VALUES (?, ?, ?, ?)",
+        )
+        .bind(project_id).bind(tag).bind(index as i64).bind(definition_id)
+        .execute(&mut **tx).await?;
     }
-
     for resource in &input.resources {
         sqlx::query(
-            "INSERT INTO resources (
-                id, project_id, resource_type, title, url, availability, created_by_sid
-             ) VALUES (?, ?, ?, ?, ?, 'available', ?)",
+            "INSERT INTO resources (id, project_id, resource_type, title, url, availability, created_by_sid)
+             VALUES (?, ?, ?, ?, ?, 'available', ?)",
         )
-        .bind(Uuid::new_v4().to_string())
-        .bind(project_id)
-        .bind(&resource.resource_type)
-        .bind(&resource.title)
-        .bind(&resource.url)
-        .bind(actor_sid)
-        .execute(&mut **tx)
-        .await?;
+        .bind(Uuid::new_v4().to_string()).bind(project_id).bind(&resource.resource_type)
+        .bind(&resource.title).bind(&resource.url).bind(actor_sid)
+        .execute(&mut **tx).await?;
     }
     Ok(())
 }
 
-async fn load_detail(state: &AppState, slug: &str) -> Result<ProjectDetail, AppError> {
-    let row = sqlx::query_as::<_, ProjectDetailRow>(
-        "SELECT id, slug, name, summary, primary_category, highest_award, status,
-                critique, owner_name, source_name
-         FROM projects WHERE slug = ? AND archived_at IS NULL",
-    )
-    .bind(slug)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    let resources = sqlx::query_as::<_, ProjectResource>(
-        "SELECT id, resource_type, title, url FROM resources
-         WHERE project_id = ? ORDER BY created_at ASC, title ASC",
-    )
-    .bind(&row.id)
-    .fetch_all(&state.db)
-    .await?;
-    let tags = sqlx::query_scalar::<_, String>(
-        "SELECT tag FROM project_tags WHERE project_id = ? ORDER BY sort_order ASC, tag ASC",
-    )
-    .bind(&row.id)
-    .fetch_all(&state.db)
-    .await?;
-
-    Ok(ProjectDetail {
+async fn summary_from_row(
+    state: &AppState,
+    row: ProjectSummaryRow,
+) -> Result<ProjectSummary, AppError> {
+    let tags = load_tags(state, &row.id, 3).await?;
+    Ok(ProjectSummary {
         id: row.id,
         slug: row.slug,
         name: row.name,
@@ -522,42 +645,121 @@ async fn load_detail(state: &AppState, slug: &str) -> Result<ProjectDetail, AppE
         primary_category: row.primary_category,
         highest_award: row.highest_award,
         status: row.status,
+        tags,
+        cover_mode: row.cover_mode,
+        cover_resource_id: row.cover_resource_id,
+        cover_resource_url: row.cover_resource_url,
+        cover_title: row.cover_title.unwrap_or_else(|| "项目封面".to_owned()),
+        cover_subtitle: row.cover_subtitle.unwrap_or_default(),
+        cover_keywords: parse_keywords(&row.cover_keywords),
+        cover_tone: row.cover_tone,
+        cover_confidence: row.cover_confidence.unwrap_or(0.0),
+    })
+}
+
+async fn load_detail(state: &AppState, slug: &str) -> Result<ProjectDetail, AppError> {
+    let row = sqlx::query_as::<_, ProjectDetailRow>(
+        "SELECT p.id, p.slug, p.name, p.summary, p.primary_category, p.classification_status,
+                p.highest_award, p.status, p.critique, p.owner_name, p.source_name, p.cover_mode,
+                p.cover_resource_id, (SELECT url FROM resources r WHERE r.id = p.cover_resource_id) cover_resource_url,
+                p.cover_title, p.cover_subtitle, p.cover_keywords, p.cover_tone, p.cover_confidence
+         FROM projects p WHERE p.slug = ? AND p.archived_at IS NULL",
+    )
+    .bind(slug).fetch_optional(&state.db).await?.ok_or(AppError::NotFound)?;
+    let resources = sqlx::query_as::<_, ProjectResource>(
+        "SELECT id, resource_type, title, url FROM resources WHERE project_id = ? ORDER BY created_at ASC, title ASC",
+    )
+    .bind(&row.id).fetch_all(&state.db).await?;
+    let tags = load_tags(state, &row.id, 20).await?;
+    Ok(ProjectDetail {
+        id: row.id,
+        slug: row.slug,
+        name: row.name,
+        summary: row.summary,
+        primary_category: row.primary_category,
+        classification_status: row.classification_status,
+        highest_award: row.highest_award,
+        status: row.status,
         critique: row.critique,
         owner_name: row.owner_name,
         source_name: row.source_name,
         resources,
         tags,
+        cover_mode: row.cover_mode,
+        cover_resource_id: row.cover_resource_id,
+        cover_resource_url: row.cover_resource_url,
+        cover_title: row.cover_title.unwrap_or_else(|| "项目封面".to_owned()),
+        cover_subtitle: row.cover_subtitle.unwrap_or_default(),
+        cover_keywords: parse_keywords(&row.cover_keywords),
+        cover_tone: row.cover_tone,
+        cover_confidence: row.cover_confidence.unwrap_or(0.0),
     })
+}
+
+async fn load_tags(
+    state: &AppState,
+    project_id: &str,
+    limit: i64,
+) -> Result<Vec<String>, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT tag FROM project_tags WHERE project_id = ? ORDER BY sort_order ASC, tag ASC LIMIT ?",
+    )
+    .bind(project_id).bind(limit).fetch_all(&state.db).await?)
+}
+
+fn parse_keywords(value: &str) -> Vec<String> {
+    serde_json::from_str(value).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ProjectResourceInput, ProjectWriteInput};
+    use super::{ProjectResourceInput, ProjectWriteInput, PROJECT_CATEGORIES};
 
     fn valid_input() -> ProjectWriteInput {
         ProjectWriteInput {
             slug: "lab-tool".to_owned(),
             name: "实验室工具".to_owned(),
             summary: "用于测试项目写入。".to_owned(),
-            primary_category: "工具项目".to_owned(),
+            primary_category: "传统软件".to_owned(),
             highest_award: None,
             status: "研发中".to_owned(),
             critique: String::new(),
             owner_name: None,
             source_name: None,
-            tags: vec!["软件".to_owned(), " 软件 ".to_owned()],
+            tags: vec!["Web".to_owned(), " Web ".to_owned()],
             resources: vec![ProjectResourceInput {
                 resource_type: "github".to_owned(),
                 title: "代码".to_owned(),
                 url: Some("https://github.com/example/repo".to_owned()),
             }],
+            cover_mode: None,
+            cover_title: None,
+            cover_subtitle: None,
+            cover_keywords: vec![],
+            cover_tone: None,
         }
+    }
+
+    #[test]
+    fn categories_are_exactly_the_five_product_categories() {
+        assert_eq!(
+            PROJECT_CATEGORIES,
+            ["传统软件", "智能硬件", "AI 软件", "数字媒体", "研究成果"]
+        );
+        for category in PROJECT_CATEGORIES {
+            let mut input = valid_input();
+            input.primary_category = (*category).to_owned();
+            assert!(input.normalized().is_ok());
+        }
+        let mut old = valid_input();
+        old.primary_category = "工具项目".to_owned();
+        assert!(old.normalized().is_err());
     }
 
     #[test]
     fn normalizes_and_deduplicates_project_input() {
         let input = valid_input().normalized().expect("valid project");
-        assert_eq!(input.tags, vec!["软件"]);
+        assert_eq!(input.tags, vec!["Web"]);
         assert_eq!(input.resources[0].resource_type, "github");
     }
 

@@ -47,3 +47,7 @@ export function canAccessIctHub(user: User | null): boolean {
 export function canManageProjects(user: User | null): boolean {
   return canAccessIctHub(user)
 }
+
+export function canManageTags(user: User | null): boolean {
+  return Boolean(user?.isAdmin || user?.isSuperAdmin || user?.role === 'admin' || user?.role === 'superadmin')
+}

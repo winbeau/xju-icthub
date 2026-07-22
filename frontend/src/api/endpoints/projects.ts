@@ -2,10 +2,12 @@ import { request } from '@/api/client'
 import { authHeaders } from '@/api/endpoints/auth'
 import {
   ProjectDetailSchema,
+  GeneratedCoverSchema,
   ProjectImportResponseSchema,
   ProjectListResponseSchema,
   type ProjectCategory,
   type ProjectDetail,
+  type GeneratedCover,
   type ProjectImportResponse,
   type ProjectListResponse,
   type ProjectWriteInput,
@@ -74,6 +76,31 @@ export function importProjects(items: ProjectWriteInput[]): Promise<ProjectImpor
     path: '/api/v1/projects/import',
     body: { items },
     schema: ProjectImportResponseSchema,
+    headers: authHeaders(),
+  })
+}
+
+export function generateProjectCover(slug: string): Promise<GeneratedCover> {
+  return request({
+    method: 'POST',
+    path: `/api/v1/projects/${encodeURIComponent(slug)}/cover/generate`,
+    schema: GeneratedCoverSchema,
+    headers: authHeaders(),
+  })
+}
+
+export function updateProjectCover(
+  slug: string,
+  input: Pick<
+    ProjectWriteInput,
+    'coverMode' | 'coverTitle' | 'coverSubtitle' | 'coverKeywords' | 'coverTone'
+  > & { coverResourceId: string | null },
+): Promise<GeneratedCover> {
+  return request({
+    method: 'PATCH',
+    path: `/api/v1/projects/${encodeURIComponent(slug)}/cover`,
+    body: input,
+    schema: GeneratedCoverSchema,
     headers: authHeaders(),
   })
 }
