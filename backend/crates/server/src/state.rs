@@ -15,6 +15,8 @@ pub struct AppState {
     pub import_max_upload_bytes: u64,
     pub import_max_unpacked_bytes: u64,
     pub ffprobe_bin: Arc<String>,
+    pub ffmpeg_bin: Arc<String>,
+    pub pdftoppm_bin: Arc<String>,
 }
 
 impl AppState {
@@ -46,6 +48,8 @@ impl AppState {
             import_max_upload_bytes: config.import_max_upload_bytes,
             import_max_unpacked_bytes: config.import_max_unpacked_bytes,
             ffprobe_bin: Arc::new(config.ffprobe_bin.clone()),
+            ffmpeg_bin: Arc::new(config.ffmpeg_bin.clone()),
+            pdftoppm_bin: Arc::new(config.pdftoppm_bin.clone()),
         })
     }
 
@@ -69,6 +73,8 @@ impl AppState {
             import_max_upload_bytes: 16 * 1024 * 1024,
             import_max_unpacked_bytes: 64 * 1024 * 1024,
             ffprobe_bin: Arc::new("ffprobe-not-installed-for-tests".to_owned()),
+            ffmpeg_bin: Arc::new("ffmpeg-not-installed-for-tests".to_owned()),
+            pdftoppm_bin: Arc::new("pdftoppm-not-installed-for-tests".to_owned()),
         })
     }
 }

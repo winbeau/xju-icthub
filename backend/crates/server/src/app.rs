@@ -317,6 +317,26 @@ mod tests {
         assert!(detail["events"]
             .as_array()
             .is_some_and(|items| items.iter().any(|event| event["eventType"] == "completed")));
+        assert_eq!(
+            detail["analysisBundlePath"],
+            "analysis/analysis-bundle.json"
+        );
+        let bundle_path = state
+            .import_root
+            .join(id)
+            .join("analysis/analysis-bundle.json");
+        let bundle: Value =
+            serde_json::from_slice(&std::fs::read(bundle_path).expect("analysis bundle file"))
+                .expect("analysis bundle JSON");
+        assert_eq!(bundle["schemaVersion"], "1.0");
+        assert!(bundle["artifacts"].as_array().is_some_and(|artifacts| {
+            artifacts.iter().any(|artifact| {
+                artifact["relativePath"] == "vision/docs/说明.docx"
+                    && artifact["textExcerpt"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("视觉项目说明"))
+            })
+        }));
     }
 
     #[tokio::test]

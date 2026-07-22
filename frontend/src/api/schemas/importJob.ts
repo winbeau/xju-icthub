@@ -90,6 +90,7 @@ export const ImportJobSchema = z.object({
   attemptCount: z.number().int().nonnegative(),
   startedAt: z.string().nullable(),
   completedAt: z.string().nullable(),
+  analysisBundlePath: z.string().nullable(),
   inputs: z.array(ImportInputSchema),
   artifacts: z.array(ImportArtifactSchema),
   events: z.array(ImportJobEventSchema),

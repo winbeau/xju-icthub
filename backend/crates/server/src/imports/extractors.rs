@@ -1,5 +1,5 @@
 use std::{
-    fs::File,
+    fs::{self, File},
     io::{Read, Seek},
     path::Path,
     process::{Command, Stdio},
@@ -9,6 +9,7 @@ use std::{
 use anyhow::{bail, Context};
 use quick_xml::{events::Event, Reader};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use wait_timeout::ChildExt;
 use zip::ZipArchive;
 
@@ -18,10 +19,17 @@ const MAX_INNER_ARCHIVE_ENTRIES: usize = 2_000;
 const MAX_INNER_XML_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_PDF_BYTES: u64 = 32 * 1024 * 1024;
 const FFPROBE_TIMEOUT: Duration = Duration::from_secs(8);
+const PREVIEW_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub(super) struct ArtifactExtraction {
     pub extractor: String,
     pub text: Option<String>,
+    pub metadata: Value,
+}
+
+pub(super) struct GeneratedPreview {
+    pub output_path: std::path::PathBuf,
+    pub extractor: &'static str,
     pub metadata: Value,
 }
 
@@ -87,6 +95,82 @@ pub(super) fn extract_artifact(
         }
         _ => ArtifactExtraction::indexed(source_metadata(kind, &extension)),
     }
+}
+
+pub(super) fn generate_visual_preview(
+    source_path: &Path,
+    relative_path: &Path,
+    kind: &str,
+    preview_root: &Path,
+    ffmpeg_bin: &str,
+    pdftoppm_bin: &str,
+) -> anyhow::Result<Option<GeneratedPreview>> {
+    let extension = relative_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let (tool, extractor) = if kind == "video" {
+        (ffmpeg_bin, "ffmpeg_thumbnail")
+    } else if extension == "pdf" {
+        (pdftoppm_bin, "pdftoppm_first_page")
+    } else {
+        return Ok(None);
+    };
+
+    fs::create_dir_all(preview_root)?;
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(relative_path.to_string_lossy().as_bytes())
+    );
+    let output_path = preview_root.join(format!("preview-{}.jpg", &digest[..16]));
+    let mut command = Command::new(tool);
+    if kind == "video" {
+        command.args(["-v", "error", "-ss", "0.5", "-i"]);
+        command.arg(source_path);
+        command.args([
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale='min(1280,iw)':-2",
+            "-q:v",
+            "3",
+            "-y",
+        ]);
+        command.arg(&output_path);
+    } else {
+        let output_prefix = output_path.with_extension("");
+        command.args(["-f", "1", "-l", "1", "-singlefile", "-jpeg", "-r", "120"]);
+        command.arg(source_path);
+        command.arg(&output_prefix);
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().context("preview tool is not available")?;
+    let status = child.wait_timeout(PREVIEW_TIMEOUT)?;
+    let Some(status) = status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        bail!("preview generation timed out");
+    };
+    if !status.success() || !output_path.is_file() {
+        bail!("preview generation failed");
+    }
+    let size_bytes = fs::metadata(&output_path)?.len();
+    if size_bytes == 0 {
+        bail!("preview image is empty");
+    }
+    Ok(Some(GeneratedPreview {
+        output_path,
+        extractor,
+        metadata: json!({
+            "status": "ok",
+            "sourcePath": relative_path.to_string_lossy(),
+            "sizeBytes": size_bytes
+        }),
+    }))
 }
 
 fn extract_docx(path: &Path) -> anyhow::Result<ArtifactExtraction> {

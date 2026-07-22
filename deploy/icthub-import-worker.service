@@ -1,7 +1,7 @@
 [Unit]
-Description=新疆大学 ICTHub backend
-After=network-online.target
-Wants=network-online.target
+Description=新疆大学 ICTHub import worker
+After=network-online.target icthub-backend.service
+Wants=network-online.target icthub-backend.service
 
 [Service]
 Type=simple
@@ -9,11 +9,10 @@ User=winbeau
 Group=winbeau
 WorkingDirectory=/home/winbeau/xju-icthub/backend
 EnvironmentFile=-/home/winbeau/xju-icthub/backend/.env
-Environment=ICTHUB_IMPORT_WORKER_EMBEDDED=false
-ExecStart=/home/winbeau/xju-icthub/backend/target/release/icthub-server
+ExecStart=/home/winbeau/xju-icthub/backend/target/release/icthub-import-worker
 Restart=on-failure
 RestartSec=3
-TimeoutStopSec=20
+TimeoutStopSec=30
 UMask=0077
 
 NoNewPrivileges=true

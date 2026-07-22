@@ -293,6 +293,7 @@ registerMock('POST', '/api/v1/import-jobs', ({ body, headers }) => {
     attemptCount: 1,
     startedAt: now,
     completedAt: now,
+    analysisBundlePath: 'analysis/analysis-bundle.json',
     inputs: [
       ...files.map((file) => ({
         id: crypto.randomUUID(), inputKind: 'file' as const, provider: 'upload', displayName: file.name,

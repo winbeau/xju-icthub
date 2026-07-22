@@ -12,6 +12,8 @@ pub struct Config {
     pub import_worker_poll_ms: u64,
     pub import_worker_lease_secs: u64,
     pub ffprobe_bin: String,
+    pub ffmpeg_bin: String,
+    pub pdftoppm_bin: String,
 }
 
 impl Config {
@@ -38,6 +40,9 @@ impl Config {
         let import_worker_poll_ms = env_u64("ICTHUB_IMPORT_WORKER_POLL_MS", 500)?;
         let import_worker_lease_secs = env_u64("ICTHUB_IMPORT_WORKER_LEASE_SECS", 120)?;
         let ffprobe_bin = env::var("ICTHUB_FFPROBE_BIN").unwrap_or_else(|_| "ffprobe".to_owned());
+        let ffmpeg_bin = env::var("ICTHUB_FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".to_owned());
+        let pdftoppm_bin =
+            env::var("ICTHUB_PDFTOPPM_BIN").unwrap_or_else(|_| "pdftoppm".to_owned());
         Ok(Self {
             bind_addr,
             database_url,
@@ -49,6 +54,8 @@ impl Config {
             import_worker_poll_ms,
             import_worker_lease_secs,
             ffprobe_bin,
+            ffmpeg_bin,
+            pdftoppm_bin,
         })
     }
 }

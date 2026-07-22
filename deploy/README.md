@@ -14,10 +14,28 @@ cp backend/.env.example backend/.env
 生产环境变量至少包含：
 
 ```dotenv
-ICTHUB_BIND=127.0.0.1:8003
-DATABASE_URL=sqlite://data/icthub.db?mode=rwc
+ICTHUB_BIND_ADDR=127.0.0.1:8003
+ICTHUB_DATABASE_URL=sqlite://data/icthub.db?mode=rwc
 FEIYUE_AUTH_URL=http://127.0.0.1:8001
+ICTHUB_IMPORT_ROOT=uploads/imports
+ICTHUB_IMPORT_MAX_UPLOAD_MB=256
+ICTHUB_IMPORT_MAX_UNPACKED_MB=768
+ICTHUB_IMPORT_WORKER_POLL_MS=500
+ICTHUB_IMPORT_WORKER_LEASE_SECS=120
+ICTHUB_FFPROBE_BIN=ffprobe
+ICTHUB_FFMPEG_BIN=ffmpeg
+ICTHUB_PDFTOPPM_BIN=pdftoppm
 RUST_LOG=icthub_server=info,tower_http=info
+```
+
+生产环境使用独立 Worker，`icthub-backend.service` 已固定
+`ICTHUB_IMPORT_WORKER_EMBEDDED=false`。本地开发不启动独立 Worker 时，可以保留默认值
+`true`，由 API 进程内嵌运行单个 Worker。
+
+视频元数据、视频封面和 PDF 首页预览需要：
+
+```bash
+sudo apt-get install ffmpeg poppler-utils
 ```
 
 ## 2. systemd 与 Nginx
@@ -26,10 +44,12 @@ RUST_LOG=icthub_server=info,tower_http=info
 
 ```bash
 sudo install -m 0644 deploy/icthub-backend.service /etc/systemd/system/icthub-backend.service
+sudo install -m 0644 deploy/icthub-import-worker.service /etc/systemd/system/icthub-import-worker.service
 sudo install -m 0644 deploy/nginx-icthub-http.conf /etc/nginx/sites-available/icthub
 sudo ln -sfn /etc/nginx/sites-available/icthub /etc/nginx/sites-enabled/icthub
 sudo systemctl daemon-reload
 sudo systemctl enable --now icthub-backend.service
+sudo systemctl enable --now icthub-import-worker.service
 sudo nginx -t
 sudo systemctl reload nginx
 ```
@@ -59,6 +79,7 @@ sudo systemctl reload nginx
 
 ```bash
 systemctl --no-pager --full status icthub-backend.service
+systemctl --no-pager --full status icthub-import-worker.service
 curl --noproxy '*' http://127.0.0.1:8003/api/health
 curl --noproxy '*' -H 'Host: icthub.top' http://127.0.0.1/api/v1/projects
 ```
