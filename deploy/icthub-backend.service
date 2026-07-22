@@ -1,0 +1,31 @@
+[Unit]
+Description=新疆大学 ICTHub backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=winbeau
+Group=winbeau
+WorkingDirectory=/home/winbeau/xju-icthub/backend
+EnvironmentFile=-/home/winbeau/xju-icthub/backend/.env
+ExecStart=/home/winbeau/xju-icthub/backend/target/release/icthub-server
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/winbeau/xju-icthub/backend/data
+ReadWritePaths=/home/winbeau/xju-icthub/backend/uploads
+CapabilityBoundingSet=
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

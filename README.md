@@ -25,6 +25,7 @@
 - [里程碑与验收](docs/里程碑.md)
 - [与 xju-feiyue 的认证及部署集成](docs/认证与部署集成.md)
 - [xju-feiyue 前端复用记录](docs/前端复用记录.md)
+- [huawei2 部署说明](deploy/README.md)
 - [项目库交互原型](docs/prototypes/02-editorial-list.html)
 - [前端设计参考：XjuSelab/xju-feiyue](https://github.com/XjuSelab/xju-feiyue)
 
