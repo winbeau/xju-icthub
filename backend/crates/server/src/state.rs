@@ -39,12 +39,17 @@ impl AppState {
 
     #[cfg(test)]
     pub async fn for_test() -> anyhow::Result<Self> {
+        Self::for_test_with_identity_url("http://127.0.0.1:9").await
+    }
+
+    #[cfg(test)]
+    pub async fn for_test_with_identity_url(identity_url: &str) -> anyhow::Result<Self> {
         let db = SqlitePoolOptions::new().connect("sqlite::memory:").await?;
         sqlx::query("PRAGMA foreign_keys = ON").execute(&db).await?;
         sqlx::migrate!("../../migrations").run(&db).await?;
         Ok(Self {
             db,
-            identity: FeiyueIdentityClient::new("http://127.0.0.1:9".to_owned()),
+            identity: FeiyueIdentityClient::new(identity_url.to_owned()),
         })
     }
 }

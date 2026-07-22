@@ -30,7 +30,7 @@ export function AppShell() {
           <div className="flex shrink-0 items-center gap-2">
             {canManage && (
               <Button asChild size="sm" className="hidden sm:inline-flex">
-                <Link to="/admin/projects">
+                <Link to="/admin/projects/new">
                   <Plus aria-hidden />
                   新建项目
                 </Link>

@@ -6,6 +6,7 @@ import { HomePage } from '@/pages/HomePage'
 import { LoginPage } from '@/pages/LoginPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 import { ProjectDetailPage } from '@/pages/ProjectDetailPage'
+import { ProjectEditorPage } from '@/pages/ProjectEditorPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 
 export const router: ReturnType<typeof createBrowserRouter> = createBrowserRouter([
@@ -21,6 +22,22 @@ export const router: ReturnType<typeof createBrowserRouter> = createBrowserRoute
         element: (
           <RequireAccess requireLabMember>
             <AdminProjectsPage />
+          </RequireAccess>
+        ),
+      },
+      {
+        path: '/admin/projects/new',
+        element: (
+          <RequireAccess requireLabMember>
+            <ProjectEditorPage />
+          </RequireAccess>
+        ),
+      },
+      {
+        path: '/admin/projects/:slug/edit',
+        element: (
+          <RequireAccess requireLabMember>
+            <ProjectEditorPage />
           </RequireAccess>
         ),
       },

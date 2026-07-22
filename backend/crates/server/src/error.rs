@@ -11,8 +11,14 @@ use thiserror::Error;
 pub enum AppError {
     #[error("unauthorized")]
     Unauthorized,
+    #[error("forbidden")]
+    Forbidden,
     #[error("not found")]
     NotFound,
+    #[error("{0}")]
+    BadRequest(String),
+    #[error("{0}")]
+    Conflict(String),
     #[error("identity service unavailable")]
     IdentityUnavailable,
     #[error("database error")]
@@ -23,7 +29,10 @@ impl AppError {
     fn status(&self) -> StatusCode {
         match self {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
+            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Conflict(_) => StatusCode::CONFLICT,
             Self::IdentityUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -41,7 +50,10 @@ impl IntoResponse for AppError {
         let status = self.status();
         let code = match status {
             StatusCode::UNAUTHORIZED => "unauthorized",
+            StatusCode::FORBIDDEN => "forbidden",
             StatusCode::NOT_FOUND => "not_found",
+            StatusCode::BAD_REQUEST => "bad_request",
+            StatusCode::CONFLICT => "conflict",
             StatusCode::SERVICE_UNAVAILABLE => "identity_unavailable",
             _ => "internal_error",
         };
