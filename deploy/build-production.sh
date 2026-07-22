@@ -5,6 +5,7 @@ repo_dir="${1:-/home/winbeau/xju-icthub}"
 
 cd "$repo_dir"
 git pull --ff-only
+git submodule update --init --depth 1 vendor/codex
 
 cd frontend
 pnpm install --frozen-lockfile
