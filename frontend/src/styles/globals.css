@@ -1,0 +1,94 @@
+/* Core reset and shadcn bridge copied from xju-feiyue globals.css. */
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Serif+SC:wght@200..900&display=swap');
+
+@import './tokens.css';
+@import './prose-claude.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 40 9% 20%;
+    --card: 0 0% 100%;
+    --card-foreground: 40 9% 20%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 40 9% 20%;
+    --primary: 40 9% 20%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 40 22% 96%;
+    --secondary-foreground: 40 9% 20%;
+    --muted: 40 22% 96%;
+    --muted-foreground: 43 3% 46%;
+    --accent: 40 22% 96%;
+    --accent-foreground: 40 9% 20%;
+    --destructive: 0 73% 56%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 40 11% 92%;
+    --input: 40 11% 92%;
+    --ring: 43 3% 46%;
+    --radius: 0.5rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    min-width: 320px;
+    background: var(--color-bg);
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    min-width: 320px;
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  ::selection {
+    background: rgba(35, 131, 226, 0.16);
+  }
+}
+
+.project-stack-card {
+  transform: translate(var(--card-x, -50%), var(--card-y, 0)) rotate(var(--card-rot, 0deg));
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: project-card-in 600ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.project-stack-card:hover {
+  --card-y: -8px;
+  --card-rot: 0deg;
+  z-index: 10;
+}
+
+@keyframes project-card-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-stack-card {
+    animation: none;
+    transition: none;
+  }
+}

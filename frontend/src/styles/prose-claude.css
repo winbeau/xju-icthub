@@ -1,0 +1,28 @@
+.prose-icthub {
+  color: var(--color-text);
+  line-height: 1.8;
+}
+
+.prose-icthub :where(h1, h2, h3) {
+  margin-top: 1.8em;
+  margin-bottom: 0.65em;
+  font-family: var(--font-serif);
+  line-height: 1.25;
+}
+
+.prose-icthub :where(p, ul, ol) {
+  margin: 0.85em 0;
+}
+
+.prose-icthub a {
+  color: var(--color-link);
+  text-underline-offset: 3px;
+}
+
+.prose-icthub code {
+  border-radius: 4px;
+  background: rgba(135, 131, 120, 0.15);
+  padding: 0.15em 0.35em;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}

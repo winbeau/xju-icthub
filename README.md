@@ -16,12 +16,13 @@
 
 ## 当前阶段
 
-项目处于开题与架构设计阶段。项目库默认采用简约的“编辑部列表”：突出项目名称、内容简介、主类别与曾获奖，其他管理字段进入项目详情。
+项目已经进入实现阶段。第一版 React/Rust 工程骨架、飞跃登录复用、简约项目列表、项目详情、SQLite 迁移和身份适配器已经落地；开发环境默认使用前端 mock 数据，便于先完成界面与交互。
 
 - [项目开题文档](docs/项目开题文档.md)
 - [开发计划](docs/开发计划.md)
 - [里程碑与验收](docs/里程碑.md)
 - [与 xju-feiyue 的认证及部署集成](docs/认证与部署集成.md)
+- [xju-feiyue 前端复用记录](docs/前端复用记录.md)
 - [项目库交互原型](docs/prototypes/02-editorial-list.html)
 - [前端设计参考：XjuSelab/xju-feiyue](https://github.com/XjuSelab/xju-feiyue)
 
@@ -46,6 +47,33 @@ xju-icthub/
 └── README.md
 ```
 
+## 本地开发
+
+前端：
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+默认开发模式使用内置 mock。需要连接本地服务时设置 `VITE_USE_MOCK=false`，Vite 会把 `/api` 转发到 `127.0.0.1:8003`、把 `/auth` 转发到飞跃 `127.0.0.1:8001`。
+
+后端：
+
+```bash
+cd backend
+cargo run -p icthub-server
+```
+
+后端默认创建 `backend/data/icthub.db`，监听 `127.0.0.1:8003`。配置示例见 `backend/.env.example`。
+
+完整检查：
+
+```bash
+make check
+```
+
 ## License
 
-许可证将在正式进入开发阶段前确认。
+ICTHub 项目自身许可证待确认。已复用组件的许可说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
