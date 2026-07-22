@@ -16,16 +16,12 @@ export function AppShell() {
         <div className="mx-auto flex h-16 max-w-6xl items-center gap-5 px-5 sm:px-8">
           <Link
             to="/"
-            className="shrink-0 font-serif text-[17px] font-semibold tracking-[-0.01em] text-text"
+            className="shrink-0 font-serif text-lg font-semibold tracking-[-0.01em] text-text"
           >
             新疆大学 ICT&amp;软开实验室
           </Link>
 
-          <nav
-            aria-label="实验室全局导航预留"
-            className="min-w-0 flex-1"
-            data-global-nav-slot
-          />
+          <nav aria-label="实验室全局导航预留" className="min-w-0 flex-1" data-global-nav-slot />
 
           <div className="flex shrink-0 items-center gap-2">
             {canManage && (
@@ -64,7 +60,7 @@ export function AppShell() {
       </main>
 
       <footer className="border-t border-border">
-        <div className="mx-auto flex max-w-6xl flex-col gap-1 px-5 py-7 text-xs text-text-faint sm:flex-row sm:items-center sm:justify-between sm:px-8">
+        <div className="mx-auto flex max-w-6xl flex-col gap-1 px-5 py-7 text-sm text-text-faint sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <span>新疆大学 ICT&amp;软开实验室</span>
           <span>ICTHub · 项目资源库</span>
         </div>

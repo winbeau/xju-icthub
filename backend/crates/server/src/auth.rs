@@ -67,8 +67,12 @@ impl FeiyueIdentity {
         self.is_super_admin || self.role == "superadmin"
     }
 
-    pub fn can_manage_projects(&self) -> bool {
+    pub fn can_access_icthub(&self) -> bool {
         self.is_lab_member || self.is_superadmin()
+    }
+
+    pub fn can_manage_projects(&self) -> bool {
+        self.can_access_icthub()
     }
 }
 
@@ -94,8 +98,11 @@ impl FromRequestParts<AppState> for AuthContext {
     }
 }
 
-pub async fn context(AuthContext(identity): AuthContext) -> Json<FeiyueIdentity> {
-    Json(identity)
+pub async fn context(AuthContext(identity): AuthContext) -> Result<Json<FeiyueIdentity>, AppError> {
+    if !identity.can_access_icthub() {
+        return Err(AppError::Forbidden);
+    }
+    Ok(Json(identity))
 }
 
 #[cfg(test)]
@@ -116,8 +123,8 @@ mod tests {
 
     #[test]
     fn only_members_or_superadmins_can_manage_projects() {
-        assert!(!identity("user", false).can_manage_projects());
-        assert!(identity("user", true).can_manage_projects());
-        assert!(identity("superadmin", false).can_manage_projects());
+        assert!(!identity("user", false).can_access_icthub());
+        assert!(identity("user", true).can_access_icthub());
+        assert!(identity("superadmin", false).can_access_icthub());
     }
 }

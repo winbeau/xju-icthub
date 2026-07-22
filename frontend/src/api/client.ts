@@ -55,11 +55,7 @@ export class ApiError extends Error {
 }
 
 export type QueryValue =
-  | string
-  | number
-  | boolean
-  | ReadonlyArray<string | number | boolean>
-  | undefined
+  string | number | boolean | ReadonlyArray<string | number | boolean> | undefined
 
 type RequestOptions<T> = {
   method: HttpMethod

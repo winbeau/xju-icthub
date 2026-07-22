@@ -46,7 +46,10 @@ export function createProject(input: ProjectWriteInput): Promise<ProjectDetail> 
   })
 }
 
-export function updateProject(currentSlug: string, input: ProjectWriteInput): Promise<ProjectDetail> {
+export function updateProject(
+  currentSlug: string,
+  input: ProjectWriteInput,
+): Promise<ProjectDetail> {
   return request({
     method: 'PUT',
     path: `/api/v1/projects/${encodeURIComponent(currentSlug)}`,

@@ -1,11 +1,6 @@
 import { z } from 'zod'
 import { request } from '@/api/client'
-import {
-  LoginResponseSchema,
-  UserSchema,
-  type LoginResponse,
-  type User,
-} from '@/api/schemas/user'
+import { LoginResponseSchema, UserSchema, type LoginResponse, type User } from '@/api/schemas/user'
 
 export const TOKEN_KEY = 'icthub.auth.token'
 

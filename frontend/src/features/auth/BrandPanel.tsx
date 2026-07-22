@@ -28,17 +28,20 @@ export function BrandPanel() {
       aria-label="ICTHub 项目库简介"
     >
       <header>
-        <Link to="/projects" className="inline-flex items-center gap-2 font-serif text-lg font-semibold">
+        <Link
+          to="/projects"
+          className="inline-flex items-center gap-2 font-serif text-lg font-semibold"
+        >
           <FolderKanban size={20} strokeWidth={1.75} aria-hidden />
           ICTHub / Projects
         </Link>
         <h2 className="mt-9 max-w-[14ch] font-serif text-[46px] font-semibold leading-[1.05] tracking-[-0.025em] xl:text-[56px]">
-          让做过的项目，
+          把想法，
           <br />
-          继续被使用。
+          做成作品。
         </h2>
         <p className="mt-4 max-w-[42ch] text-base leading-7 text-text-muted">
-          项目档案、代码、文档、演示与获奖记录，都在一个可以继续交接的位置。
+          新疆大学 ICT&amp;软开实验室的项目与积累。
         </p>
       </header>
 

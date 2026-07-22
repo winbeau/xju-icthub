@@ -41,18 +41,21 @@ let mockProjects: ProjectDetail[] = PROJECT_FIXTURES.map((project) => ({
   resources: project.resources.map((resource) => ({ ...resource })),
 }))
 
-function requireManager(headers: Headers): User {
+function requireMember(headers: Headers): User {
   const token = headers.get('Authorization')?.replace(/^Bearer\s+/i, '')
   const sid = token?.startsWith('mock:') ? token.slice(5) : null
   if (!sid) throw new ApiError('请先登录', 401, '/api/v1/projects')
   const user = mockUser(sid)
   if (!user.isLabMember && !user.isSuperAdmin) {
-    throw new ApiError('只有实验室成员可以管理项目', 403, '/api/v1/projects')
+    throw new ApiError('当前账号不是实验室成员，请联系管理员', 403, '/api/v1/projects')
   }
   return user
 }
 
-function detailFromInput(input: ProjectWriteInput, id: string = crypto.randomUUID()): ProjectDetail {
+function detailFromInput(
+  input: ProjectWriteInput,
+  id: string = crypto.randomUUID(),
+): ProjectDetail {
   return {
     id,
     ...input,
@@ -80,14 +83,16 @@ registerMock('GET', '/auth/me', ({ headers }) => {
   return mockUser(sid)
 })
 
-registerMock('GET', '/api/v1/projects', ({ query }) => {
+registerMock('GET', '/api/v1/projects', ({ query, headers }) => {
+  requireMember(headers)
   const categoryRaw = query.get('category')
   const category = categoryRaw ? ProjectCategorySchema.parse(categoryRaw) : undefined
   const items = filterProjects(mockProjects, query.get('q') ?? undefined, category)
   return { items, total: items.length }
 })
 
-registerMock('GET', '/api/v1/projects/:slug', ({ path }) => {
+registerMock('GET', '/api/v1/projects/:slug', ({ path, headers }) => {
+  requireMember(headers)
   const slug = decodeURIComponent(path.split('/').at(-1) ?? '')
   const project = mockProjects.find((item) => item.slug === slug)
   if (!project) throw new ApiError('项目不存在', 404, path)
@@ -95,7 +100,7 @@ registerMock('GET', '/api/v1/projects/:slug', ({ path }) => {
 })
 
 registerMock('POST', '/api/v1/projects', ({ body, headers }) => {
-  requireManager(headers)
+  requireMember(headers)
   const input = ProjectWriteInputSchema.parse(body)
   if (mockProjects.some((project) => project.slug === input.slug)) {
     throw new ApiError(`项目路径 ${input.slug} 已存在`, 409, '/api/v1/projects')
@@ -106,12 +111,14 @@ registerMock('POST', '/api/v1/projects', ({ body, headers }) => {
 })
 
 registerMock('PUT', '/api/v1/projects/:slug', ({ body, headers, path }) => {
-  requireManager(headers)
+  requireMember(headers)
   const currentSlug = decodeURIComponent(path.split('/').at(-1) ?? '')
   const index = mockProjects.findIndex((project) => project.slug === currentSlug)
   if (index < 0) throw new ApiError('项目不存在', 404, path)
   const input = ProjectWriteInputSchema.parse(body)
-  if (mockProjects.some((project, itemIndex) => project.slug === input.slug && itemIndex !== index)) {
+  if (
+    mockProjects.some((project, itemIndex) => project.slug === input.slug && itemIndex !== index)
+  ) {
     throw new ApiError(`项目路径 ${input.slug} 已存在`, 409, path)
   }
   const project = detailFromInput(input, mockProjects[index]!.id)
@@ -120,7 +127,7 @@ registerMock('PUT', '/api/v1/projects/:slug', ({ body, headers, path }) => {
 })
 
 registerMock('DELETE', '/api/v1/projects/:slug', ({ headers, path }) => {
-  requireManager(headers)
+  requireMember(headers)
   const slug = decodeURIComponent(path.split('/').at(-1) ?? '')
   const index = mockProjects.findIndex((project) => project.slug === slug)
   if (index < 0) throw new ApiError('项目不存在', 404, path)
@@ -129,10 +136,10 @@ registerMock('DELETE', '/api/v1/projects/:slug', ({ headers, path }) => {
 })
 
 registerMock('POST', '/api/v1/projects/import', ({ body, headers }) => {
-  requireManager(headers)
-  const payload = ProjectWriteInputSchema.array().max(200).parse(
-    (body as { items?: unknown } | null)?.items,
-  )
+  requireMember(headers)
+  const payload = ProjectWriteInputSchema.array()
+    .max(200)
+    .parse((body as { items?: unknown } | null)?.items)
   let created = 0
   let updated = 0
   for (const input of payload) {

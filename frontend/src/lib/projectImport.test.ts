@@ -21,8 +21,8 @@ describe('parseProjectImport', () => {
   })
 
   it('reports the row number for invalid data', () => {
-    expect(() =>
-      parseProjectImport('slug,name,category,summary\nbad,项目,未知类别,说明'),
-    ).toThrow('第 2 行')
+    expect(() => parseProjectImport('slug,name,category,summary\nbad,项目,未知类别,说明')).toThrow(
+      '第 2 行',
+    )
   })
 })

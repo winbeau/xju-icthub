@@ -12,35 +12,18 @@ import { ProjectsPage } from '@/pages/ProjectsPage'
 export const router: ReturnType<typeof createBrowserRouter> = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
   {
-    element: <AppShell />,
+    element: (
+      <RequireAccess requireLabMember>
+        <AppShell />
+      </RequireAccess>
+    ),
     children: [
       { path: '/', element: <HomePage /> },
       { path: '/projects', element: <ProjectsPage /> },
       { path: '/projects/:slug', element: <ProjectDetailPage /> },
-      {
-        path: '/admin/projects',
-        element: (
-          <RequireAccess requireLabMember>
-            <AdminProjectsPage />
-          </RequireAccess>
-        ),
-      },
-      {
-        path: '/admin/projects/new',
-        element: (
-          <RequireAccess requireLabMember>
-            <ProjectEditorPage />
-          </RequireAccess>
-        ),
-      },
-      {
-        path: '/admin/projects/:slug/edit',
-        element: (
-          <RequireAccess requireLabMember>
-            <ProjectEditorPage />
-          </RequireAccess>
-        ),
-      },
+      { path: '/admin/projects', element: <AdminProjectsPage /> },
+      { path: '/admin/projects/new', element: <ProjectEditorPage /> },
+      { path: '/admin/projects/:slug/edit', element: <ProjectEditorPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

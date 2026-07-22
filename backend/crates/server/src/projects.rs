@@ -128,8 +128,10 @@ pub struct ProjectDetail {
 
 pub async fn list(
     State(state): State<AppState>,
+    AuthContext(identity): AuthContext,
     Query(query): Query<ProjectListQuery>,
 ) -> Result<Json<ProjectListResponse>, AppError> {
+    require_member(&identity)?;
     let mut items = sqlx::query_as::<_, ProjectSummary>(
         "SELECT id, slug, name, summary, primary_category, highest_award, status
          FROM projects WHERE archived_at IS NULL ORDER BY updated_at DESC, name ASC",
@@ -163,8 +165,10 @@ pub async fn list(
 
 pub async fn detail(
     State(state): State<AppState>,
+    AuthContext(identity): AuthContext,
     Path(slug): Path<String>,
 ) -> Result<Json<ProjectDetail>, AppError> {
+    require_member(&identity)?;
     Ok(Json(load_detail(&state, &slug).await?))
 }
 
@@ -173,7 +177,7 @@ pub async fn create(
     AuthContext(identity): AuthContext,
     Json(input): Json<ProjectWriteInput>,
 ) -> Result<(StatusCode, Json<ProjectDetail>), AppError> {
-    require_manager(&identity)?;
+    require_member(&identity)?;
     let input = input.normalized()?;
     let mut tx = state.db.begin().await?;
 
@@ -203,7 +207,7 @@ pub async fn update(
     Path(current_slug): Path<String>,
     Json(input): Json<ProjectWriteInput>,
 ) -> Result<Json<ProjectDetail>, AppError> {
-    require_manager(&identity)?;
+    require_member(&identity)?;
     let input = input.normalized()?;
     let mut tx = state.db.begin().await?;
 
@@ -238,7 +242,7 @@ pub async fn archive(
     AuthContext(identity): AuthContext,
     Path(slug): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    require_manager(&identity)?;
+    require_member(&identity)?;
     let result = sqlx::query(
         "UPDATE projects SET archived_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
          WHERE slug = ? AND archived_at IS NULL",
@@ -257,7 +261,7 @@ pub async fn import(
     AuthContext(identity): AuthContext,
     Json(request): Json<ProjectImportRequest>,
 ) -> Result<Json<ProjectImportResponse>, AppError> {
-    require_manager(&identity)?;
+    require_member(&identity)?;
     if request.items.is_empty() {
         return Err(AppError::BadRequest("导入内容不能为空".to_owned()));
     }
@@ -306,8 +310,8 @@ pub async fn import(
     }))
 }
 
-fn require_manager(identity: &FeiyueIdentity) -> Result<(), AppError> {
-    if identity.can_manage_projects() {
+fn require_member(identity: &FeiyueIdentity) -> Result<(), AppError> {
+    if identity.can_access_icthub() {
         Ok(())
     } else {
         Err(AppError::Forbidden)

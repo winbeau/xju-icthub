@@ -82,7 +82,8 @@ export function AdminProjectsPage() {
             <div className="max-w-2xl">
               <h2 className="font-medium">从表格粘贴</h2>
               <p className="mt-1 text-sm leading-6 text-text-muted">
-                支持 Excel/WPS 复制出的制表符表格，也支持 CSV。相同 slug 会更新原项目；单次最多 200 条。
+                支持 Excel/WPS 复制出的制表符表格，也支持 CSV。相同 slug 会更新原项目；单次最多 200
+                条。
               </p>
             </div>
             <Button
@@ -110,18 +111,24 @@ export function AdminProjectsPage() {
               <p className="text-sm font-medium">准备导入 {importPreview.length} 个项目</p>
               <ul className="mt-2 space-y-1 text-sm text-text-muted">
                 {importPreview.slice(0, 5).map((project) => (
-                  <li key={project.slug}>{project.name} · {project.primaryCategory}</li>
+                  <li key={project.slug}>
+                    {project.name} · {project.primaryCategory}
+                  </li>
                 ))}
               </ul>
               {importPreview.length > 5 && (
-                <p className="mt-2 text-xs text-text-faint">另有 {importPreview.length - 5} 个项目</p>
+                <p className="mt-2 text-xs text-text-faint">
+                  另有 {importPreview.length - 5} 个项目
+                </p>
               )}
             </div>
           )}
           <div className="mt-3 flex justify-end gap-2">
             {importPreview ? (
               <>
-                <Button variant="ghost" onClick={() => setImportPreview(null)}>重新检查</Button>
+                <Button variant="ghost" onClick={() => setImportPreview(null)}>
+                  重新检查
+                </Button>
                 <Button
                   onClick={() => importMutation.mutate(importPreview)}
                   disabled={importMutation.isPending}

@@ -9,9 +9,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AppError {
-    #[error("unauthorized")]
+    #[error("请先登录")]
     Unauthorized,
-    #[error("forbidden")]
+    #[error("当前账号不是实验室成员，请联系管理员")]
     Forbidden,
     #[error("not found")]
     NotFound,

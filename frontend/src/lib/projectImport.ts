@@ -31,7 +31,9 @@ export function parseProjectImport(text: string): ProjectWriteInput[] {
   if (lines.length > 201) throw new Error('单次最多导入 200 个项目')
 
   const delimiter = lines[0]!.includes('\t') ? '\t' : ','
-  const headers = parseDelimitedLine(lines[0]!, delimiter).map((header) => header.trim().toLowerCase())
+  const headers = parseDelimitedLine(lines[0]!, delimiter).map((header) =>
+    header.trim().toLowerCase(),
+  )
   const indexes = resolveHeaderIndexes(headers)
 
   return lines.slice(1).map((line, rowIndex) => {

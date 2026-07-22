@@ -23,30 +23,44 @@ export function ProjectDetailPage() {
   })
 
   if (project.isLoading) {
-    return <div className="mx-auto max-w-5xl px-5 py-16 text-sm text-text-muted sm:px-8">项目加载中…</div>
+    return (
+      <div className="mx-auto max-w-5xl px-5 py-16 text-base text-text-muted sm:px-8">
+        项目加载中…
+      </div>
+    )
   }
 
   if (!project.data || project.isError) {
-    return <div className="mx-auto max-w-5xl px-5 py-16 text-sm text-cat-internet sm:px-8">项目不存在或加载失败。</div>
+    return (
+      <div className="mx-auto max-w-5xl px-5 py-16 text-base text-cat-internet sm:px-8">
+        项目不存在或加载失败。
+      </div>
+    )
   }
 
   const data = project.data
   return (
     <article className="mx-auto max-w-5xl px-5 py-12 sm:px-8 sm:py-16">
-      <Link to="/projects" className="inline-flex items-center gap-2 text-sm text-text-muted hover:text-text">
+      <Link
+        to="/projects"
+        className="inline-flex items-center gap-2 text-base text-text-muted hover:text-text"
+      >
         <ArrowLeft size={16} aria-hidden />
         返回项目库
       </Link>
 
       <header className="mt-10 border-b border-border pb-10">
-        <span className="text-sm font-medium" style={{ color: categoryColor(data.primaryCategory) }}>
+        <span
+          className="text-base font-medium"
+          style={{ color: categoryColor(data.primaryCategory) }}
+        >
           {data.primaryCategory}
         </span>
         <h1 className="mt-3 max-w-4xl font-serif text-3xl font-semibold leading-tight tracking-[-0.025em] sm:text-5xl">
           {data.name}
         </h1>
         <p className="mt-5 max-w-3xl text-base leading-8 text-text-muted">{data.summary}</p>
-        <div className="mt-5 flex items-center gap-2 text-sm text-text-muted">
+        <div className="mt-5 flex items-center gap-2 text-base text-text-muted">
           <Trophy size={16} aria-hidden />
           <span>曾获奖：{data.highestAward ?? '暂无'}</span>
         </div>
@@ -66,21 +80,28 @@ export function ProjectDetailPage() {
                 <ResourceRow key={resource.id} resource={resource} />
               ))}
               {data.resources.length === 0 && (
-                <p className="border-b border-border py-4 text-sm text-text-muted">尚未整理资源。</p>
+                <p className="border-b border-border py-4 text-sm text-text-muted">
+                  尚未整理资源。
+                </p>
               )}
             </div>
           </section>
         </div>
 
-        <aside className="space-y-6 text-sm">
+        <aside className="space-y-6 text-base">
           <Meta label="当前状态" value={data.status} />
           <Meta label="目前负责" value={data.ownerName ?? '待确认'} />
           <Meta label="来源者 / 方" value={data.sourceName ?? '待确认'} />
           <div>
-            <h3 className="text-xs font-medium uppercase tracking-[0.12em] text-text-faint">技术标签</h3>
+            <h3 className="text-sm font-medium uppercase tracking-[0.12em] text-text-faint">
+              技术标签
+            </h3>
             <div className="mt-2 flex flex-wrap gap-2">
               {data.tags.map((tag) => (
-                <span key={tag} className="rounded-sm bg-bg-subtle px-2 py-1 text-xs text-text-muted">
+                <span
+                  key={tag}
+                  className="rounded-sm bg-bg-subtle px-2 py-1 text-sm text-text-muted"
+                >
                   {tag}
                 </span>
               ))}
@@ -95,7 +116,7 @@ export function ProjectDetailPage() {
 function Meta({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <h3 className="text-xs font-medium uppercase tracking-[0.12em] text-text-faint">{label}</h3>
+      <h3 className="text-sm font-medium uppercase tracking-[0.12em] text-text-faint">{label}</h3>
       <p className="mt-1.5 text-text">{value}</p>
     </div>
   )
@@ -124,7 +145,11 @@ function ResourceRow({ resource }: { resource: ProjectResource }) {
     )
   }
 
-  return <div className="flex items-center gap-3 border-b border-border py-4 text-sm text-text-muted">{content}</div>
+  return (
+    <div className="flex items-center gap-3 border-b border-border py-4 text-sm text-text-muted">
+      {content}
+    </div>
+  )
 }
 
 function resourceIcon(type: ProjectResource['type']) {

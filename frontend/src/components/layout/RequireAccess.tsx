@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
-import { canManageProjects } from '@/api/schemas/user'
+import { canAccessIctHub } from '@/api/schemas/user'
+import { AccessDeniedPage } from '@/pages/AccessDeniedPage'
 import { useAuthStore } from '@/stores/authStore'
 
 type RequireAccessProps = {
@@ -17,8 +18,8 @@ export function RequireAccess({ children, requireLabMember = false }: RequireAcc
     return <Navigate to="/login" replace state={{ from: location.pathname }} />
   }
 
-  if (requireLabMember && !canManageProjects(user)) {
-    return <Navigate to="/projects" replace />
+  if (requireLabMember && !canAccessIctHub(user)) {
+    return <AccessDeniedPage />
   }
 
   return <>{children}</>

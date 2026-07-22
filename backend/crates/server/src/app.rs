@@ -79,6 +79,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/api/v1/projects")
+                    .header(header::AUTHORIZATION, "Bearer member")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -103,6 +104,39 @@ mod tests {
             .oneshot(project_request("user"))
             .await
             .expect("create response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn project_read_requires_a_lab_member() {
+        let identity_url = spawn_identity_service().await;
+        let state = AppState::for_test_with_identity_url(&identity_url)
+            .await
+            .expect("test state");
+        let app = build_router(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/projects")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("anonymous list response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/projects")
+                    .header(header::AUTHORIZATION, "Bearer user")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("non-member list response");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 

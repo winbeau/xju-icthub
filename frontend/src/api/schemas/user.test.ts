@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { UserSchema, canManageProjects } from '@/api/schemas/user'
+import { UserSchema, canAccessIctHub, canManageProjects } from '@/api/schemas/user'
 
 const baseUser = {
   sid: '20211010000',
@@ -11,12 +11,15 @@ describe('UserSchema', () => {
   it('keeps compatibility before the Feiyue lab-member migration', () => {
     const user = UserSchema.parse(baseUser)
     expect(user.isLabMember ?? false).toBe(false)
+    expect(canAccessIctHub(user)).toBe(false)
     expect(canManageProjects(user)).toBe(false)
   })
 
   it('allows lab members and superadmins to manage projects', () => {
     const member = UserSchema.parse({ ...baseUser, isLabMember: true })
     const superadmin = UserSchema.parse({ ...baseUser, role: 'superadmin' })
+    expect(canAccessIctHub(member)).toBe(true)
+    expect(canAccessIctHub(superadmin)).toBe(true)
     expect(canManageProjects(member)).toBe(true)
     expect(canManageProjects(superadmin)).toBe(true)
   })

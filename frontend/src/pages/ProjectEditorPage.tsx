@@ -108,7 +108,9 @@ export function ProjectEditorPage() {
   const setResource = (index: number, resource: ProjectResourceInput) => {
     setForm((current) => ({
       ...current,
-      resources: current.resources.map((item, itemIndex) => (itemIndex === index ? resource : item)),
+      resources: current.resources.map((item, itemIndex) =>
+        itemIndex === index ? resource : item,
+      ),
     }))
   }
 
@@ -131,13 +133,19 @@ export function ProjectEditorPage() {
         <p className="text-xs font-medium uppercase tracking-[0.16em] text-text-faint">
           {editing ? 'Edit Project' : 'New Project'}
         </p>
-        <h1 className="mt-3 font-serif text-3xl font-semibold">{editing ? '编辑项目' : '新建项目'}</h1>
+        <h1 className="mt-3 font-serif text-3xl font-semibold">
+          {editing ? '编辑项目' : '新建项目'}
+        </h1>
       </div>
 
       <form onSubmit={submit} className="space-y-10 pt-8">
         <section className="grid gap-5 sm:grid-cols-2">
           <Field label="项目名" htmlFor="project-name" className="sm:col-span-2">
-            <Input id="project-name" value={form.name} onChange={(event) => setField('name', event.target.value)} />
+            <Input
+              id="project-name"
+              value={form.name}
+              onChange={(event) => setField('name', event.target.value)}
+            />
           </Field>
           <Field label="项目路径" htmlFor="project-slug" hint="用于 URL，例如 lab-device-booking">
             <Input
@@ -152,11 +160,16 @@ export function ProjectEditorPage() {
               id="project-category"
               value={form.primaryCategory}
               onChange={(event) =>
-                setField('primaryCategory', event.target.value as ProjectWriteInput['primaryCategory'])
+                setField(
+                  'primaryCategory',
+                  event.target.value as ProjectWriteInput['primaryCategory'],
+                )
               }
               className="h-10 w-full rounded-md border border-input bg-bg px-3 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
             >
-              {PROJECT_CATEGORIES.map((category) => <option key={category}>{category}</option>)}
+              {PROJECT_CATEGORIES.map((category) => (
+                <option key={category}>{category}</option>
+              ))}
             </select>
           </Field>
           <Field label="内容简介" htmlFor="project-summary" className="sm:col-span-2">
@@ -182,7 +195,9 @@ export function ProjectEditorPage() {
               onChange={(event) => setField('status', event.target.value)}
               className="h-10 w-full rounded-md border border-input bg-bg px-3 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
             >
-              {PROJECT_STATUSES.map((status) => <option key={status}>{status}</option>)}
+              {PROJECT_STATUSES.map((status) => (
+                <option key={status}>{status}</option>
+              ))}
             </select>
           </Field>
           <Field label="目前负责" htmlFor="project-owner">
@@ -199,7 +214,12 @@ export function ProjectEditorPage() {
               onChange={(event) => setField('sourceName', event.target.value || null)}
             />
           </Field>
-          <Field label="混合标签" htmlFor="project-tags" hint="使用逗号分隔，例如：软件, AI, Web" className="sm:col-span-2">
+          <Field
+            label="混合标签"
+            htmlFor="project-tags"
+            hint="使用逗号分隔，例如：软件, AI, Web"
+            className="sm:col-span-2"
+          >
             <Input
               id="project-tags"
               value={tagsText}
@@ -236,26 +256,40 @@ export function ProjectEditorPage() {
           </div>
           <div className="space-y-3 pt-4">
             {form.resources.map((resource, index) => (
-              <div key={index} className="grid gap-3 rounded-md border border-border p-3 sm:grid-cols-[140px_1fr_1.3fr_auto]">
+              <div
+                key={index}
+                className="grid gap-3 rounded-md border border-border p-3 sm:grid-cols-[140px_1fr_1.3fr_auto]"
+              >
                 <select
                   value={resource.type}
                   onChange={(event) =>
-                    setResource(index, { ...resource, type: event.target.value as ProjectResourceInput['type'] })
+                    setResource(index, {
+                      ...resource,
+                      type: event.target.value as ProjectResourceInput['type'],
+                    })
                   }
                   className="h-10 rounded-md border border-input bg-bg px-3 text-sm"
                   aria-label="资源类型"
                 >
-                  {RESOURCE_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+                  {RESOURCE_TYPES.map((type) => (
+                    <option key={type.value} value={type.value}>
+                      {type.label}
+                    </option>
+                  ))}
                 </select>
                 <Input
                   value={resource.title}
-                  onChange={(event) => setResource(index, { ...resource, title: event.target.value })}
+                  onChange={(event) =>
+                    setResource(index, { ...resource, title: event.target.value })
+                  }
                   placeholder="资源标题"
                   aria-label="资源标题"
                 />
                 <Input
                   value={resource.url ?? ''}
-                  onChange={(event) => setResource(index, { ...resource, url: event.target.value || null })}
+                  onChange={(event) =>
+                    setResource(index, { ...resource, url: event.target.value || null })
+                  }
                   placeholder="https://…（可稍后补）"
                   aria-label="资源链接"
                 />
@@ -264,7 +298,12 @@ export function ProjectEditorPage() {
                   variant="ghost"
                   size="icon"
                   aria-label="移除资源"
-                  onClick={() => setField('resources', form.resources.filter((_, itemIndex) => itemIndex !== index))}
+                  onClick={() =>
+                    setField(
+                      'resources',
+                      form.resources.filter((_, itemIndex) => itemIndex !== index),
+                    )
+                  }
                 >
                   <Trash2 aria-hidden />
                 </Button>
@@ -277,7 +316,9 @@ export function ProjectEditorPage() {
         </section>
 
         <div className="flex items-center justify-between border-t border-border pt-6">
-          <p className="text-sm text-cat-internet" role="alert">{formError}</p>
+          <p className="text-sm text-cat-internet" role="alert">
+            {formError}
+          </p>
           <Button type="submit" disabled={save.isPending}>
             {save.isPending ? '正在保存…' : editing ? '保存修改' : '创建项目'}
           </Button>
@@ -302,7 +343,9 @@ function Field({
 }) {
   return (
     <div className={className}>
-      <Label htmlFor={htmlFor} className="mb-2 block">{label}</Label>
+      <Label htmlFor={htmlFor} className="mb-2 block">
+        {label}
+      </Label>
       {children}
       {hint && <p className="mt-1.5 text-xs text-text-faint">{hint}</p>}
     </div>

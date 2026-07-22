@@ -40,6 +40,10 @@ export const LoginRequestSchema = z.object({
 
 export type LoginRequest = z.infer<typeof LoginRequestSchema>
 
-export function canManageProjects(user: User | null): boolean {
+export function canAccessIctHub(user: User | null): boolean {
   return Boolean(user?.isLabMember || user?.isSuperAdmin || user?.role === 'superadmin')
+}
+
+export function canManageProjects(user: User | null): boolean {
+  return canAccessIctHub(user)
 }
