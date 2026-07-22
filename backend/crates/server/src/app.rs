@@ -69,7 +69,10 @@ mod tests {
     use zip::{write::SimpleFileOptions, ZipWriter};
 
     use super::build_router;
-    use crate::state::AppState;
+    use crate::{
+        imports::{process_one_queued_job, ImportWorkerOptions},
+        state::AppState,
+    };
 
     #[tokio::test]
     async fn health_endpoint_is_public() {
@@ -92,7 +95,7 @@ mod tests {
         let state = AppState::for_test_with_identity_url(&identity_url)
             .await
             .expect("test state");
-        let app = build_router(state);
+        let app = build_router(state.clone());
 
         let response = app
             .clone()
@@ -160,7 +163,7 @@ mod tests {
         let state = AppState::for_test_with_identity_url(&identity_url)
             .await
             .expect("test state");
-        let app = build_router(state);
+        let app = build_router(state.clone());
 
         let response = app
             .clone()
@@ -222,7 +225,7 @@ mod tests {
         let state = AppState::for_test_with_identity_url(&identity_url)
             .await
             .expect("test state");
-        let app = build_router(state);
+        let app = build_router(state.clone());
         let zip = test_project_zip();
         let boundary = "icthub-test-boundary";
         let mut multipart = Vec::new();
@@ -261,6 +264,11 @@ mod tests {
         let created: Value = serde_json::from_slice(&bytes).expect("create json");
         let id = created["id"].as_str().expect("job id");
 
+        let worker = ImportWorkerOptions::new(50, 30);
+        assert!(process_one_queued_job(&state, &worker)
+            .await
+            .expect("worker processes queued job"));
+
         let mut completed = None;
         for _ in 0..100 {
             let response = app
@@ -295,6 +303,60 @@ mod tests {
         assert!(detail["artifacts"]
             .as_array()
             .is_some_and(|items| !items.is_empty()));
+        assert!(detail["events"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|event| event["eventType"] == "completed")));
+    }
+
+    #[tokio::test]
+    async fn import_worker_recovers_an_expired_lease() {
+        let state = AppState::for_test().await.expect("test state");
+        let job_id = "expired-import-job";
+        let job_dir = state.import_root.join(job_id);
+        std::fs::create_dir_all(job_dir.join("source/input"))
+            .expect("expired job source directory");
+        std::fs::write(
+            job_dir.join("source/input/README.md"),
+            "项目名：恢复测试\n这是一个 Web 日常工具。",
+        )
+        .expect("expired job input");
+        sqlx::query(
+            "INSERT INTO import_jobs (
+                id, status, stage, progress, source_kind, source_name, created_by_sid,
+                worker_id, lease_expires_at, attempt_count
+             ) VALUES (?, 'extracting', '旧 Worker 已退出', 18, 'mixed', '恢复测试',
+                '20211010001', 'dead-worker', datetime('now', '-5 minutes'), 1)",
+        )
+        .bind(job_id)
+        .execute(&state.db)
+        .await
+        .expect("expired job");
+        sqlx::query(
+            "INSERT INTO import_inputs (
+                id, job_id, input_kind, provider, display_name, local_path, mime_type,
+                size_bytes, sha256, sort_order, status
+             ) VALUES ('expired-input', ?, 'file', 'upload', 'README.md',
+                'source/input/README.md', 'text/markdown', 47, 'test', 0, 'queued')",
+        )
+        .bind(job_id)
+        .execute(&state.db)
+        .await
+        .expect("expired input");
+
+        let worker = ImportWorkerOptions::new(50, 30);
+        assert!(process_one_queued_job(&state, &worker)
+            .await
+            .expect("recovered worker job"));
+        let recovered = sqlx::query_as::<_, (String, i64, Option<String>)>(
+            "SELECT status, attempt_count, worker_id FROM import_jobs WHERE id = ?",
+        )
+        .bind(job_id)
+        .fetch_one(&state.db)
+        .await
+        .expect("recovered job status");
+        assert_eq!(recovered.0, "completed");
+        assert_eq!(recovered.1, 2);
+        assert!(recovered.2.is_none());
     }
 
     #[tokio::test]

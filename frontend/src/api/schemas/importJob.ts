@@ -31,6 +31,16 @@ export const ImportArtifactSchema = z.object({
   isCoverCandidate: z.boolean(),
 })
 
+export const ImportJobEventSchema = z.object({
+  id: z.number().int(),
+  eventType: z.string(),
+  status: z.string(),
+  stage: z.string(),
+  progress: z.number().int().min(0).max(100),
+  message: z.string().nullable(),
+  createdAt: z.string(),
+})
+
 export const ImportAnalysisSchema = z.object({
   projectDraft: z.object({
     name: z.string(),
@@ -76,8 +86,12 @@ export const ImportJobSchema = z.object({
   errorMessage: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  attemptCount: z.number().int().nonnegative(),
+  startedAt: z.string().nullable(),
+  completedAt: z.string().nullable(),
   inputs: z.array(ImportInputSchema),
   artifacts: z.array(ImportArtifactSchema),
+  events: z.array(ImportJobEventSchema),
   result: ImportAnalysisSchema.nullable(),
 })
 

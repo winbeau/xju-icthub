@@ -8,6 +8,9 @@ pub struct Config {
     pub import_root: PathBuf,
     pub import_max_upload_bytes: u64,
     pub import_max_unpacked_bytes: u64,
+    pub import_worker_embedded: bool,
+    pub import_worker_poll_ms: u64,
+    pub import_worker_lease_secs: u64,
 }
 
 impl Config {
@@ -30,6 +33,9 @@ impl Config {
         let import_max_upload_bytes = env_u64("ICTHUB_IMPORT_MAX_UPLOAD_MB", 256)? * 1024 * 1024;
         let import_max_unpacked_bytes =
             env_u64("ICTHUB_IMPORT_MAX_UNPACKED_MB", 768)? * 1024 * 1024;
+        let import_worker_embedded = env_bool("ICTHUB_IMPORT_WORKER_EMBEDDED", true)?;
+        let import_worker_poll_ms = env_u64("ICTHUB_IMPORT_WORKER_POLL_MS", 500)?;
+        let import_worker_lease_secs = env_u64("ICTHUB_IMPORT_WORKER_LEASE_SECS", 120)?;
         Ok(Self {
             bind_addr,
             database_url,
@@ -37,7 +43,22 @@ impl Config {
             import_root,
             import_max_upload_bytes,
             import_max_unpacked_bytes,
+            import_worker_embedded,
+            import_worker_poll_ms,
+            import_worker_lease_secs,
         })
+    }
+}
+
+fn env_bool(name: &str, default: bool) -> Result<bool, Box<dyn std::error::Error>> {
+    match env::var(name) {
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Ok(true),
+            "0" | "false" | "no" | "off" => Ok(false),
+            _ => Err(format!("{name} must be a boolean").into()),
+        },
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(Box::new(error)),
     }
 }
 

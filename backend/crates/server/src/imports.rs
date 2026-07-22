@@ -3,6 +3,7 @@ use std::{
     fs::File,
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{bail, Context};
@@ -25,7 +26,7 @@ const MAX_SINGLE_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_TEXT_CORPUS_BYTES: usize = 512 * 1024;
 const MAX_VISIBLE_ARTIFACTS: i64 = 500;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LinkInput {
     url: String,
@@ -52,9 +53,25 @@ pub struct ImportJobResponse {
     error_message: Option<String>,
     created_at: String,
     updated_at: String,
+    attempt_count: i64,
+    started_at: Option<String>,
+    completed_at: Option<String>,
     inputs: Vec<ImportInputView>,
     artifacts: Vec<ImportArtifactView>,
+    events: Vec<ImportJobEventView>,
     result: Option<ImportAnalysis>,
+}
+
+#[derive(Clone, Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct ImportJobEventView {
+    id: i64,
+    event_type: String,
+    status: String,
+    stage: String,
+    progress: i64,
+    message: Option<String>,
+    created_at: String,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -145,6 +162,26 @@ struct ImportJobRow {
     error_message: Option<String>,
     created_at: String,
     updated_at: String,
+    attempt_count: i64,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImportWorkerOptions {
+    pub worker_id: String,
+    pub poll_interval: Duration,
+    pub lease_duration: Duration,
+}
+
+impl ImportWorkerOptions {
+    pub fn new(poll_ms: u64, lease_secs: u64) -> Self {
+        Self {
+            worker_id: format!("worker-{}", Uuid::new_v4()),
+            poll_interval: Duration::from_millis(poll_ms.max(50)),
+            lease_duration: Duration::from_secs(lease_secs.max(30)),
+        }
+    }
 }
 
 struct AnalysisBuild {
@@ -168,6 +205,16 @@ struct UploadedInput {
     local_path: PathBuf,
     mime_type: String,
     size_bytes: u64,
+    sha256: String,
+}
+
+#[derive(Debug, FromRow)]
+struct StoredFileInput {
+    id: String,
+    display_name: String,
+    local_path: String,
+    mime_type: String,
+    size_bytes: i64,
     sha256: String,
 }
 
@@ -330,6 +377,16 @@ pub async fn create(
     .bind(&identity.sid)
     .execute(&mut *tx)
     .await?;
+    insert_event_tx(
+        &mut tx,
+        &job_id,
+        "queued",
+        "queued",
+        "等待解析",
+        5,
+        Some("材料已保存，等待后台整理"),
+    )
+    .await?;
 
     for (index, upload) in uploads.iter().enumerate() {
         let local_path = upload
@@ -392,40 +449,6 @@ pub async fn create(
     tx.commit().await?;
     job_dir_guard.keep();
 
-    let worker_state = state.clone();
-    let worker_job_id = job_id.clone();
-    let worker_uploads = uploads.clone();
-    let worker_source_name = uploads
-        .first()
-        .map(|upload| upload.display_name.clone())
-        .unwrap_or_else(|| project_name_hint(&prompt));
-    let worker_prompt = prompt.clone();
-    let worker_links = links;
-    tokio::spawn(async move {
-        if let Err(error) = process_job(
-            &worker_state,
-            &worker_job_id,
-            &worker_uploads,
-            &worker_source_name,
-            &worker_prompt,
-            &worker_links,
-        )
-        .await
-        {
-            tracing::error!(job_id = %worker_job_id, error = %error, "import job failed");
-            let message = user_facing_worker_error(&error);
-            let _ = sqlx::query(
-                "UPDATE import_jobs SET status = 'failed', stage = '解析失败', progress = 100,
-                    error_message = ?, updated_at = CURRENT_TIMESTAMP, completed_at = CURRENT_TIMESTAMP
-                 WHERE id = ? AND status != 'cancelled'",
-            )
-            .bind(message)
-            .bind(&worker_job_id)
-            .execute(&worker_state.db)
-            .await;
-        }
-    });
-
     Ok((StatusCode::ACCEPTED, Json(load_job(&state, &job_id).await?)))
 }
 
@@ -456,10 +479,22 @@ pub async fn cancel(
     }
     sqlx::query(
         "UPDATE import_jobs SET status = 'cancelled', stage = '已取消',
-            error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            error_message = NULL, cancel_requested_at = CURRENT_TIMESTAMP,
+            lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP,
+            completed_at = CURRENT_TIMESTAMP WHERE id = ?",
     )
     .bind(&id)
     .execute(&state.db)
+    .await?;
+    insert_event(
+        &state,
+        &id,
+        "cancelled",
+        "cancelled",
+        "已取消",
+        100,
+        Some("成员取消了本次整理任务"),
+    )
     .await?;
     Ok(Json(load_job(&state, &id).await?))
 }
@@ -518,6 +553,16 @@ pub async fn refine(
     .bind(&id)
     .execute(&state.db)
     .await?;
+    insert_event(
+        &state,
+        &id,
+        "refinement_saved",
+        "completed",
+        "补充提示已保存，等待 Codex",
+        100,
+        Some("补充提示已加入任务上下文"),
+    )
+    .await?;
     Ok(Json(load_job(&state, &id).await?))
 }
 
@@ -549,9 +594,233 @@ async fn is_cancelled(state: &AppState, job_id: &str) -> anyhow::Result<bool> {
     )
 }
 
+pub async fn run_import_worker(
+    state: AppState,
+    options: ImportWorkerOptions,
+) -> anyhow::Result<()> {
+    tracing::info!(worker_id = %options.worker_id, "import worker started");
+    loop {
+        match process_one_queued_job(&state, &options).await {
+            Ok(true) => {}
+            Ok(false) => tokio::time::sleep(options.poll_interval).await,
+            Err(error) => {
+                tracing::error!(
+                    worker_id = %options.worker_id,
+                    error = %error,
+                    "import worker polling failed"
+                );
+                tokio::time::sleep(options.poll_interval.max(Duration::from_secs(1))).await;
+            }
+        }
+    }
+}
+
+pub async fn process_one_queued_job(
+    state: &AppState,
+    options: &ImportWorkerOptions,
+) -> anyhow::Result<bool> {
+    let Some(job_id) = claim_next_job(state, options).await? else {
+        return Ok(false);
+    };
+
+    insert_event(
+        state,
+        &job_id,
+        "claimed",
+        "normalizing",
+        "准备材料",
+        10,
+        Some(&format!("任务已由 {} 领取", options.worker_id)),
+    )
+    .await?;
+
+    let heartbeat_state = state.clone();
+    let heartbeat_job_id = job_id.clone();
+    let heartbeat_worker_id = options.worker_id.clone();
+    let heartbeat_lease = options.lease_duration;
+    let heartbeat_interval = Duration::from_secs((heartbeat_lease.as_secs() / 3).max(10));
+    let heartbeat = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(heartbeat_interval).await;
+            let lease_modifier = format!("+{} seconds", heartbeat_lease.as_secs());
+            let updated = sqlx::query(
+                "UPDATE import_jobs SET last_heartbeat_at = CURRENT_TIMESTAMP,
+                    lease_expires_at = datetime('now', ?), updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ? AND worker_id = ?
+                    AND status NOT IN ('completed', 'failed', 'cancelled')",
+            )
+            .bind(lease_modifier)
+            .bind(&heartbeat_job_id)
+            .bind(&heartbeat_worker_id)
+            .execute(&heartbeat_state.db)
+            .await;
+            match updated {
+                Ok(result) if result.rows_affected() == 1 => {}
+                _ => break,
+            }
+        }
+    });
+
+    let result =
+        process_claimed_job(state, &job_id, &options.worker_id, options.lease_duration).await;
+    heartbeat.abort();
+
+    if let Err(error) = result {
+        tracing::error!(job_id = %job_id, error = %error, "import job failed");
+        if !is_cancelled(state, &job_id).await? {
+            let message = user_facing_worker_error(&error);
+            sqlx::query(
+                "UPDATE import_jobs SET status = 'failed', stage = '解析失败', progress = 100,
+                    error_message = ?, worker_id = NULL, lease_expires_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP, completed_at = CURRENT_TIMESTAMP
+                 WHERE id = ? AND worker_id = ? AND status != 'cancelled'",
+            )
+            .bind(&message)
+            .bind(&job_id)
+            .bind(&options.worker_id)
+            .execute(&state.db)
+            .await?;
+            insert_event(
+                state,
+                &job_id,
+                "failed",
+                "failed",
+                "解析失败",
+                100,
+                Some(&message),
+            )
+            .await?;
+        }
+    }
+
+    sqlx::query(
+        "UPDATE import_jobs SET worker_id = NULL, lease_expires_at = NULL
+         WHERE id = ? AND worker_id = ? AND status = 'cancelled'",
+    )
+    .bind(&job_id)
+    .bind(&options.worker_id)
+    .execute(&state.db)
+    .await?;
+    Ok(true)
+}
+
+async fn claim_next_job(
+    state: &AppState,
+    options: &ImportWorkerOptions,
+) -> anyhow::Result<Option<String>> {
+    let lease_modifier = format!("+{} seconds", options.lease_duration.as_secs());
+    let job_id = sqlx::query_scalar::<_, String>(
+        "UPDATE import_jobs SET status = 'normalizing', stage = '准备材料', progress = 10,
+            worker_id = ?, lease_expires_at = datetime('now', ?),
+            last_heartbeat_at = CURRENT_TIMESTAMP, started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+            attempt_count = attempt_count + 1, error_message = NULL,
+            updated_at = CURRENT_TIMESTAMP
+         WHERE id = (
+            SELECT id FROM import_jobs
+             WHERE status = 'queued'
+                OR (
+                    status IN ('normalizing', 'extracting', 'indexing', 'analyzing')
+                    AND lease_expires_at IS NOT NULL
+                    AND lease_expires_at <= CURRENT_TIMESTAMP
+                )
+             ORDER BY created_at ASC
+             LIMIT 1
+         ) AND status != 'cancelled'
+         RETURNING id",
+    )
+    .bind(&options.worker_id)
+    .bind(lease_modifier)
+    .fetch_optional(&state.db)
+    .await?;
+    Ok(job_id)
+}
+
+async fn process_claimed_job(
+    state: &AppState,
+    job_id: &str,
+    worker_id: &str,
+    lease_duration: Duration,
+) -> anyhow::Result<()> {
+    let source_name = sqlx::query_scalar::<_, String>(
+        "SELECT source_name FROM import_jobs WHERE id = ? AND worker_id = ?",
+    )
+    .bind(job_id)
+    .bind(worker_id)
+    .fetch_one(&state.db)
+    .await?;
+    let stored_files = sqlx::query_as::<_, StoredFileInput>(
+        "SELECT id, display_name, local_path, mime_type, size_bytes, sha256
+         FROM import_inputs WHERE job_id = ? AND input_kind = 'file'
+         ORDER BY sort_order ASC, created_at ASC",
+    )
+    .bind(job_id)
+    .fetch_all(&state.db)
+    .await?;
+    let job_dir = state.import_root.join(job_id);
+    let uploads = stored_files
+        .into_iter()
+        .map(|input| UploadedInput {
+            id: input.id,
+            display_name: input.display_name,
+            local_path: job_dir.join(input.local_path),
+            mime_type: input.mime_type,
+            size_bytes: input.size_bytes.max(0) as u64,
+            sha256: input.sha256,
+        })
+        .collect::<Vec<_>>();
+    let prompt_parts = sqlx::query_scalar::<_, String>(
+        "SELECT source_ref FROM import_inputs
+         WHERE job_id = ? AND input_kind = 'prompt' AND source_ref IS NOT NULL
+         ORDER BY sort_order ASC, created_at ASC",
+    )
+    .bind(job_id)
+    .fetch_all(&state.db)
+    .await?;
+    let prompt = prompt_parts.join("\n\n");
+    let links = sqlx::query_as::<_, (String, String)>(
+        "SELECT source_ref, display_name FROM import_inputs
+         WHERE job_id = ? AND input_kind = 'link' AND source_ref IS NOT NULL
+         ORDER BY sort_order ASC, created_at ASC",
+    )
+    .bind(job_id)
+    .fetch_all(&state.db)
+    .await?
+    .into_iter()
+    .map(|(url, title)| LinkInput {
+        url,
+        title: Some(title),
+    })
+    .collect::<Vec<_>>();
+    let analysis_name = uploads
+        .first()
+        .map(|upload| upload.display_name.clone())
+        .unwrap_or_else(|| {
+            let hint = project_name_hint(&prompt);
+            if hint == "待识别项目" {
+                source_name
+            } else {
+                hint
+            }
+        });
+
+    process_job(
+        state,
+        job_id,
+        worker_id,
+        lease_duration,
+        &uploads,
+        &analysis_name,
+        &prompt,
+        &links,
+    )
+    .await
+}
+
 async fn process_job(
     state: &AppState,
     job_id: &str,
+    worker_id: &str,
+    lease_duration: Duration,
     uploads: &[UploadedInput],
     source_name: &str,
     prompt: &str,
@@ -560,7 +829,16 @@ async fn process_job(
     if is_cancelled(state, job_id).await? {
         return Ok(());
     }
-    update_progress(state, job_id, "extracting", "正在安全整理附件", 18).await?;
+    update_progress(
+        state,
+        job_id,
+        worker_id,
+        lease_duration,
+        "extracting",
+        "正在安全整理附件",
+        18,
+    )
+    .await?;
     let job_dir = state.import_root.join(job_id);
     let max_unpacked = state.import_max_unpacked_bytes;
     let source_name = source_name.to_owned();
@@ -596,18 +874,32 @@ async fn process_job(
         return Ok(());
     }
 
-    update_progress(state, job_id, "analyzing", "正在生成导入预览", 76).await?;
+    update_progress(
+        state,
+        job_id,
+        worker_id,
+        lease_duration,
+        "analyzing",
+        "正在生成导入预览",
+        76,
+    )
+    .await?;
     persist_analysis(state, job_id, primary_input_id.as_deref(), &build).await?;
     let result_json = serde_json::to_string(&build.analysis)?;
-    sqlx::query(
+    let completed = sqlx::query(
         "UPDATE import_jobs SET status = 'completed', stage = '等待确认', progress = 100,
             result_json = ?, error_message = NULL, updated_at = CURRENT_TIMESTAMP,
-            completed_at = CURRENT_TIMESTAMP WHERE id = ? AND status != 'cancelled'",
+            worker_id = NULL, lease_expires_at = NULL, completed_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND worker_id = ? AND status != 'cancelled'",
     )
     .bind(result_json)
     .bind(job_id)
+    .bind(worker_id)
     .execute(&state.db)
     .await?;
+    if completed.rows_affected() != 1 {
+        bail!("import job lease was lost before completion");
+    }
     if is_cancelled(state, job_id).await? {
         return Ok(());
     }
@@ -617,25 +909,95 @@ async fn process_job(
     .bind(job_id)
     .execute(&state.db)
     .await?;
+    insert_event(
+        state,
+        job_id,
+        "completed",
+        "completed",
+        "等待确认",
+        100,
+        Some("材料整理完成，项目草稿已生成"),
+    )
+    .await?;
     Ok(())
 }
 
 async fn update_progress(
     state: &AppState,
     job_id: &str,
+    worker_id: &str,
+    lease_duration: Duration,
     status: &str,
     stage: &str,
     progress: i64,
 ) -> anyhow::Result<()> {
-    sqlx::query(
+    let lease_modifier = format!("+{} seconds", lease_duration.as_secs());
+    let updated = sqlx::query(
         "UPDATE import_jobs SET status = ?, stage = ?, progress = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND status != 'cancelled'",
+            , last_heartbeat_at = CURRENT_TIMESTAMP, lease_expires_at = datetime('now', ?)
+         WHERE id = ? AND worker_id = ? AND status != 'cancelled'",
     )
     .bind(status)
     .bind(stage)
     .bind(progress)
+    .bind(lease_modifier)
     .bind(job_id)
+    .bind(worker_id)
     .execute(&state.db)
+    .await?;
+    if updated.rows_affected() != 1 {
+        bail!("import job lease was lost or the job was cancelled");
+    }
+    insert_event(state, job_id, "progress", status, stage, progress, None).await?;
+    Ok(())
+}
+
+async fn insert_event(
+    state: &AppState,
+    job_id: &str,
+    event_type: &str,
+    status: &str,
+    stage: &str,
+    progress: i64,
+    message: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO import_job_events (
+            job_id, event_type, status, stage, progress, message
+         ) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(job_id)
+    .bind(event_type)
+    .bind(status)
+    .bind(stage)
+    .bind(progress)
+    .bind(message)
+    .execute(&state.db)
+    .await?;
+    Ok(())
+}
+
+async fn insert_event_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    job_id: &str,
+    event_type: &str,
+    status: &str,
+    stage: &str,
+    progress: i64,
+    message: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO import_job_events (
+            job_id, event_type, status, stage, progress, message
+         ) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(job_id)
+    .bind(event_type)
+    .bind(status)
+    .bind(stage)
+    .bind(progress)
+    .bind(message)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }
@@ -1505,7 +1867,8 @@ fn link_provider(url: &str) -> &'static str {
 async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResponse, AppError> {
     let row = sqlx::query_as::<_, ImportJobRow>(
         "SELECT id, status, stage, progress, source_kind, source_name, analysis_engine,
-                result_json, error_message, created_at, updated_at
+                result_json, error_message, created_at, updated_at, attempt_count,
+                started_at, completed_at
          FROM import_jobs WHERE id = ?",
     )
     .bind(id)
@@ -1515,6 +1878,13 @@ async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResponse, AppEr
     let inputs = sqlx::query_as::<_, ImportInputView>(
         "SELECT id, input_kind, provider, display_name, source_ref, mime_type, size_bytes, status
          FROM import_inputs WHERE job_id = ? ORDER BY sort_order ASC, created_at ASC",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+    let events = sqlx::query_as::<_, ImportJobEventView>(
+        "SELECT id, event_type, status, stage, progress, message, created_at
+         FROM import_job_events WHERE job_id = ? ORDER BY id ASC LIMIT 200",
     )
     .bind(id)
     .fetch_all(&state.db)
@@ -1546,8 +1916,12 @@ async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResponse, AppEr
         error_message: row.error_message,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        attempt_count: row.attempt_count,
+        started_at: row.started_at,
+        completed_at: row.completed_at,
         inputs,
         artifacts,
+        events,
         result,
     })
 }

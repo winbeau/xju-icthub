@@ -1,4 +1,4 @@
-use icthub_server::{build_router, AppState, Config};
+use icthub_server::{build_router, run_import_worker, AppState, Config, ImportWorkerOptions};
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -16,6 +16,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::from_env()?;
     let state = AppState::new(&config).await?;
+    if config.import_worker_embedded {
+        let worker_state = state.clone();
+        let worker_options = ImportWorkerOptions::new(
+            config.import_worker_poll_ms,
+            config.import_worker_lease_secs,
+        );
+        tokio::spawn(async move {
+            if let Err(error) = run_import_worker(worker_state, worker_options).await {
+                tracing::error!(error = %error, "embedded import worker stopped");
+            }
+        });
+    }
     let app = build_router(state);
     let listener = TcpListener::bind(config.bind_addr).await?;
 

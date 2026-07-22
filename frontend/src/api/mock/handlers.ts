@@ -289,6 +289,9 @@ registerMock('POST', '/api/v1/import-jobs', ({ body, headers }) => {
     errorMessage: null,
     createdAt: now,
     updatedAt: now,
+    attemptCount: 1,
+    startedAt: now,
+    completedAt: now,
     inputs: [
       ...files.map((file) => ({
         id: crypto.randomUUID(), inputKind: 'file' as const, provider: 'upload', displayName: file.name,
@@ -306,6 +309,10 @@ registerMock('POST', '/api/v1/import-jobs', ({ body, headers }) => {
       })),
     ],
     artifacts,
+    events: [
+      { id: 1, eventType: 'queued', status: 'queued', stage: '等待解析', progress: 5, message: '材料已保存，等待后台整理', createdAt: now },
+      { id: 2, eventType: 'completed', status: 'completed', stage: '等待确认', progress: 100, message: '材料整理完成，项目草稿已生成', createdAt: now },
+    ],
     result: {
       projectDraft: {
         name: projectName, slug: `import-${id.slice(0, 8)}`,
@@ -400,7 +407,13 @@ registerMock('POST', '/api/v1/import-jobs/:id/cancel', ({ path, headers }) => {
   }
   job.status = 'cancelled'
   job.stage = '已取消'
+  job.progress = 100
   job.updatedAt = new Date().toISOString()
+  job.completedAt = job.updatedAt
+  job.events.push({
+    id: job.events.length + 1, eventType: 'cancelled', status: 'cancelled', stage: '已取消',
+    progress: 100, message: '成员取消了本次整理任务', createdAt: job.updatedAt,
+  })
   return job
 })
 
@@ -426,6 +439,10 @@ registerMock('POST', '/api/v1/import-jobs/:id/refine', ({ path, headers, body })
   ]
   job.stage = '补充提示已保存，等待 Codex'
   job.updatedAt = new Date().toISOString()
+  job.events.push({
+    id: job.events.length + 1, eventType: 'refinement_saved', status: 'completed',
+    stage: job.stage, progress: 100, message: '补充提示已加入任务上下文', createdAt: job.updatedAt,
+  })
   return job
 })
 
