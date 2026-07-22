@@ -14,6 +14,7 @@ pub struct AppState {
     pub import_root: Arc<PathBuf>,
     pub import_max_upload_bytes: u64,
     pub import_max_unpacked_bytes: u64,
+    pub ffprobe_bin: Arc<String>,
 }
 
 impl AppState {
@@ -44,6 +45,7 @@ impl AppState {
             import_root: Arc::new(config.import_root.clone()),
             import_max_upload_bytes: config.import_max_upload_bytes,
             import_max_unpacked_bytes: config.import_max_unpacked_bytes,
+            ffprobe_bin: Arc::new(config.ffprobe_bin.clone()),
         })
     }
 
@@ -66,6 +68,7 @@ impl AppState {
             import_root: Arc::new(import_root),
             import_max_upload_bytes: 16 * 1024 * 1024,
             import_max_unpacked_bytes: 64 * 1024 * 1024,
+            ffprobe_bin: Arc::new("ffprobe-not-installed-for-tests".to_owned()),
         })
     }
 }

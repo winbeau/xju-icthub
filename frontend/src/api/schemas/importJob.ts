@@ -28,6 +28,7 @@ export const ImportArtifactSchema = z.object({
   mimeType: z.string().nullable(),
   sizeBytes: z.number().int().nonnegative(),
   extractor: z.string(),
+  metadata: z.record(z.unknown()),
   isCoverCandidate: z.boolean(),
 })
 

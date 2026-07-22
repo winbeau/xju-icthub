@@ -11,6 +11,7 @@ pub struct Config {
     pub import_worker_embedded: bool,
     pub import_worker_poll_ms: u64,
     pub import_worker_lease_secs: u64,
+    pub ffprobe_bin: String,
 }
 
 impl Config {
@@ -36,6 +37,7 @@ impl Config {
         let import_worker_embedded = env_bool("ICTHUB_IMPORT_WORKER_EMBEDDED", true)?;
         let import_worker_poll_ms = env_u64("ICTHUB_IMPORT_WORKER_POLL_MS", 500)?;
         let import_worker_lease_secs = env_u64("ICTHUB_IMPORT_WORKER_LEASE_SECS", 120)?;
+        let ffprobe_bin = env::var("ICTHUB_FFPROBE_BIN").unwrap_or_else(|_| "ffprobe".to_owned());
         Ok(Self {
             bind_addr,
             database_url,
@@ -46,6 +48,7 @@ impl Config {
             import_worker_embedded,
             import_worker_poll_ms,
             import_worker_lease_secs,
+            ffprobe_bin,
         })
     }
 }

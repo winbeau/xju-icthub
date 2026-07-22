@@ -21,6 +21,10 @@ use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::{auth::AuthContext, error::AppError, state::AppState};
 
+mod extractors;
+
+use extractors::extract_artifact;
+
 const MAX_ARCHIVE_ENTRIES: usize = 5_000;
 const MAX_SINGLE_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_TEXT_CORPUS_BYTES: usize = 512 * 1024;
@@ -87,7 +91,7 @@ struct ImportInputView {
     status: String,
 }
 
-#[derive(Clone, Debug, Serialize, FromRow)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ImportArtifactView {
     id: String,
@@ -96,6 +100,19 @@ struct ImportArtifactView {
     mime_type: Option<String>,
     size_bytes: i64,
     extractor: String,
+    metadata: serde_json::Value,
+    is_cover_candidate: bool,
+}
+
+#[derive(Clone, Debug, FromRow)]
+struct ImportArtifactRow {
+    id: String,
+    relative_path: String,
+    artifact_kind: String,
+    mime_type: Option<String>,
+    size_bytes: i64,
+    extractor: String,
+    metadata_json: String,
     is_cover_candidate: bool,
 }
 
@@ -194,7 +211,8 @@ struct ArtifactRecord {
     artifact_kind: String,
     mime_type: Option<String>,
     size_bytes: u64,
-    extractor: &'static str,
+    extractor: String,
+    metadata_json: String,
     is_cover_candidate: bool,
 }
 
@@ -847,6 +865,7 @@ async fn process_job(
     let primary_input_id = uploads.first().map(|upload| upload.id.clone());
     let context = import_context(prompt, links);
     let prompt = prompt.to_owned();
+    let ffprobe_bin = state.ffprobe_bin.as_ref().clone();
     let build = tokio::task::spawn_blocking(move || {
         if uploads.is_empty() {
             Ok(analyze_context_only(
@@ -864,6 +883,7 @@ async fn process_job(
                 max_unpacked,
                 &context,
                 &prompt,
+                &ffprobe_bin,
             )
         }
     })
@@ -1030,7 +1050,7 @@ async fn insert_artifact(
         "INSERT INTO import_artifacts (
             id, job_id, input_id, relative_path, artifact_kind, mime_type, size_bytes,
             extractor, metadata_json, is_cover_candidate
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)",
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(job_id)
@@ -1039,7 +1059,8 @@ async fn insert_artifact(
     .bind(&artifact.artifact_kind)
     .bind(&artifact.mime_type)
     .bind(artifact.size_bytes as i64)
-    .bind(artifact.extractor)
+    .bind(&artifact.extractor)
+    .bind(&artifact.metadata_json)
     .bind(artifact.is_cover_candidate)
     .execute(&mut **tx)
     .await?;
@@ -1244,6 +1265,7 @@ fn safe_extract_and_analyze(
     max_unpacked_bytes: u64,
     context: &str,
     prompt: &str,
+    ffprobe_bin: &str,
 ) -> anyhow::Result<AnalysisBuild> {
     let archive_path = job_dir.join("source").join("input.zip");
     let extracted_root = job_dir.join("extracted");
@@ -1316,18 +1338,17 @@ fn safe_extract_and_analyze(
             .first_raw()
             .map(str::to_owned);
         let is_cover_candidate = kind == "image" && cover_candidate_rank(&enclosed) > 0;
-        let extractor = if should_read_as_text(&enclosed, copied) {
-            append_text_preview(&output_path, &relative_path, &mut text_corpus)?;
-            "text_preview"
-        } else {
-            "file_index"
-        };
+        let extraction = extract_artifact(&output_path, &enclosed, &kind, copied, ffprobe_bin);
+        if let Some(text) = extraction.text.as_deref() {
+            append_extracted_preview(&relative_path, text, &mut text_corpus);
+        }
         artifacts.push(ArtifactRecord {
             relative_path,
             artifact_kind: kind,
             mime_type,
             size_bytes: copied,
-            extractor,
+            extractor: extraction.extractor,
+            metadata_json: serde_json::to_string(&extraction.metadata)?,
             is_cover_candidate,
         });
     }
@@ -1351,20 +1372,15 @@ fn safe_extract_and_analyze(
     })
 }
 
-fn append_text_preview(path: &Path, label: &str, corpus: &mut String) -> anyhow::Result<()> {
+fn append_extracted_preview(label: &str, text: &str, corpus: &mut String) {
     if corpus.len() >= MAX_TEXT_CORPUS_BYTES {
-        return Ok(());
+        return;
     }
-    let mut file = File::open(path)?;
     let remaining = (MAX_TEXT_CORPUS_BYTES - corpus.len()).min(32 * 1024);
-    let mut buffer = vec![0_u8; remaining];
-    let read = file.read(&mut buffer)?;
-    let text = String::from_utf8_lossy(&buffer[..read]);
     corpus.push_str("\n--- ");
     corpus.push_str(label);
     corpus.push_str(" ---\n");
-    corpus.push_str(&text);
-    Ok(())
+    corpus.extend(text.chars().take(remaining));
 }
 
 fn build_fallback_analysis(
@@ -1711,32 +1727,6 @@ fn is_source_manifest(name: &str) -> bool {
     )
 }
 
-fn should_read_as_text(path: &Path, size: u64) -> bool {
-    if size > 256 * 1024 {
-        return false;
-    }
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    name.starts_with("readme")
-        || name.starts_with("license")
-        || name == "package.json"
-        || name == "cargo.toml"
-        || name == "requirements.txt"
-        || name == "pyproject.toml"
-        || matches!(
-            extension.as_str(),
-            "md" | "txt" | "toml" | "yaml" | "yml" | "json"
-        )
-}
-
 fn cover_candidate_rank(path: &Path) -> u8 {
     let name = path
         .file_stem()
@@ -1889,9 +1879,9 @@ async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResponse, AppEr
     .bind(id)
     .fetch_all(&state.db)
     .await?;
-    let artifacts = sqlx::query_as::<_, ImportArtifactView>(
+    let artifact_rows = sqlx::query_as::<_, ImportArtifactRow>(
         "SELECT id, relative_path, artifact_kind, mime_type, size_bytes, extractor,
-                is_cover_candidate
+                metadata_json, is_cover_candidate
          FROM import_artifacts WHERE job_id = ?
          ORDER BY is_cover_candidate DESC, artifact_kind ASC, relative_path ASC LIMIT ?",
     )
@@ -1899,6 +1889,20 @@ async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResponse, AppEr
     .bind(MAX_VISIBLE_ARTIFACTS)
     .fetch_all(&state.db)
     .await?;
+    let artifacts = artifact_rows
+        .into_iter()
+        .map(|row| ImportArtifactView {
+            id: row.id,
+            relative_path: row.relative_path,
+            artifact_kind: row.artifact_kind,
+            mime_type: row.mime_type,
+            size_bytes: row.size_bytes,
+            extractor: row.extractor,
+            metadata: serde_json::from_str(&row.metadata_json)
+                .unwrap_or_else(|_| serde_json::json!({})),
+            is_cover_candidate: row.is_cover_candidate,
+        })
+        .collect::<Vec<_>>();
     let result = row
         .result_json
         .as_deref()
@@ -1995,6 +1999,7 @@ mod tests {
             16 * 1024 * 1024,
             "",
             "",
+            "ffprobe-not-installed-for-tests",
         )
         .expect("analyze");
         assert_eq!(build.analysis.project_draft.name, "cotton ai");
@@ -2044,6 +2049,7 @@ mod tests {
             16 * 1024 * 1024,
             "这是一个校园 Web 工具",
             "标签：Web\n负责人：张三\n来源：课程项目",
+            "ffprobe-not-installed-for-tests",
         )
         .expect("analyze files");
         assert!(build

@@ -303,6 +303,17 @@ mod tests {
         assert!(detail["artifacts"]
             .as_array()
             .is_some_and(|items| !items.is_empty()));
+        let artifacts = detail["artifacts"].as_array().expect("artifact list");
+        assert!(artifacts.iter().any(|artifact| {
+            artifact["relativePath"] == "vision/docs/说明.docx"
+                && artifact["extractor"] == "docx_text"
+                && artifact["metadata"]["paragraphCount"] == 1
+        }));
+        assert!(artifacts.iter().any(|artifact| {
+            artifact["relativePath"] == "vision/demo.pptx"
+                && artifact["extractor"] == "pptx_text"
+                && artifact["metadata"]["slideCount"] == 1
+        }));
         assert!(detail["events"]
             .as_array()
             .is_some_and(|items| items.iter().any(|event| event["eventType"] == "completed")));
@@ -540,7 +551,45 @@ mod tests {
             .start_file("vision/src/main.py", options)
             .expect("source entry");
         writer.write_all(b"print('ok')").expect("source");
+        writer
+            .start_file("vision/docs/说明.docx", options)
+            .expect("DOCX entry");
+        writer.write_all(&test_docx()).expect("DOCX bytes");
+        writer
+            .start_file("vision/demo.pptx", options)
+            .expect("PPTX entry");
+        writer.write_all(&test_pptx()).expect("PPTX bytes");
         writer.finish().expect("finish zip").into_inner()
+    }
+
+    fn test_docx() -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(cursor);
+        writer
+            .start_file("word/document.xml", SimpleFileOptions::default())
+            .expect("DOCX XML entry");
+        writer
+            .write_all(
+                r#"<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>视觉项目说明</w:t></w:r></w:p></w:body></w:document>"#
+                    .as_bytes(),
+            )
+            .expect("DOCX XML");
+        writer.finish().expect("finish DOCX").into_inner()
+    }
+
+    fn test_pptx() -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(cursor);
+        writer
+            .start_file("ppt/slides/slide1.xml", SimpleFileOptions::default())
+            .expect("PPTX slide entry");
+        writer
+            .write_all(
+                r#"<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><p:cSld><a:p><a:r><a:t>项目展示首页</a:t></a:r></a:p></p:cSld></p:sld>"#
+                    .as_bytes(),
+            )
+            .expect("PPTX slide XML");
+        writer.finish().expect("finish PPTX").into_inner()
     }
 
     #[allow(dead_code)]

@@ -259,6 +259,7 @@ registerMock('POST', '/api/v1/import-jobs', ({ body, headers }) => {
       mimeType: file.type || null,
       sizeBytes: file.size,
       extractor: kind === 'document' ? 'text_preview' : 'file_index',
+      metadata: {},
       isCoverCandidate: kind === 'image',
     }
   })
