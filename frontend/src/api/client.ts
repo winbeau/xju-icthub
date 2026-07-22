@@ -66,6 +66,10 @@ type RequestOptions<T> = {
   headers?: Record<string, string>
 }
 
+type FormRequestOptions<T> = Omit<RequestOptions<T>, 'body' | 'query'> & {
+  body: FormData
+}
+
 export async function request<T>(options: RequestOptions<T>): Promise<T> {
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(options.query ?? {})) {
@@ -127,5 +131,50 @@ export async function request<T>(options: RequestOptions<T>): Promise<T> {
     raw = response.status === 204 ? null : await response.json()
   }
 
+  return options.schema.parse(raw)
+}
+
+export async function requestFormData<T>(options: FormRequestOptions<T>): Promise<T> {
+  let raw: unknown
+  if (useMock) {
+    const handler = findMockHandler(options.method, options.path)
+    if (!handler) {
+      throw new ApiError(
+        `No mock handler registered for ${options.method} ${options.path}`,
+        501,
+        options.path,
+      )
+    }
+    await new Promise((resolve) => setTimeout(resolve, mockLatencyMs))
+    raw = await handler({
+      method: options.method,
+      path: options.path,
+      query: new URLSearchParams(),
+      body: options.body,
+      headers: new Headers(options.headers ?? {}),
+    })
+  } else {
+    const response = await fetch(new URL(`${baseURL}${options.path}`, window.location.origin), {
+      method: options.method,
+      ...(options.headers ? { headers: options.headers } : {}),
+      body: options.body,
+    })
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`
+      try {
+        const body = (await response.json()) as {
+          detail?: unknown
+          message?: unknown
+          error?: { message?: unknown }
+        }
+        const candidate = body.detail ?? body.message ?? body.error?.message
+        if (typeof candidate === 'string' && candidate.length > 0) message = candidate
+      } catch {
+        // Keep the HTTP fallback when the server returns no JSON body.
+      }
+      throw new ApiError(message, response.status, options.path)
+    }
+    raw = await response.json()
+  }
   return options.schema.parse(raw)
 }

@@ -23,6 +23,8 @@ pub enum AppError {
     IdentityUnavailable,
     #[error("database error")]
     Database(#[source] sqlx::Error),
+    #[error("storage error")]
+    Io(#[source] std::io::Error),
 }
 
 impl AppError {
@@ -34,7 +36,7 @@ impl AppError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::IdentityUnavailable => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Database(_) | Self::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -68,5 +70,11 @@ impl IntoResponse for AppError {
 impl From<sqlx::Error> for AppError {
     fn from(value: sqlx::Error) -> Self {
         Self::Database(value)
+    }
+}
+
+impl From<std::io::Error> for AppError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
     }
 }

@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 
@@ -8,6 +11,9 @@ use crate::{auth::FeiyueIdentityClient, config::Config};
 pub struct AppState {
     pub db: SqlitePool,
     pub identity: FeiyueIdentityClient,
+    pub import_root: Arc<PathBuf>,
+    pub import_max_upload_bytes: u64,
+    pub import_max_unpacked_bytes: u64,
 }
 
 impl AppState {
@@ -30,10 +36,14 @@ impl AppState {
             .execute(&db)
             .await?;
         sqlx::migrate!("../../migrations").run(&db).await?;
+        std::fs::create_dir_all(&config.import_root)?;
 
         Ok(Self {
             db,
             identity: FeiyueIdentityClient::new(config.feiyue_auth_url.clone()),
+            import_root: Arc::new(config.import_root.clone()),
+            import_max_upload_bytes: config.import_max_upload_bytes,
+            import_max_unpacked_bytes: config.import_max_unpacked_bytes,
         })
     }
 
@@ -47,9 +57,15 @@ impl AppState {
         let db = SqlitePoolOptions::new().connect("sqlite::memory:").await?;
         sqlx::query("PRAGMA foreign_keys = ON").execute(&db).await?;
         sqlx::migrate!("../../migrations").run(&db).await?;
+        let import_root =
+            std::env::temp_dir().join(format!("icthub-import-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&import_root)?;
         Ok(Self {
             db,
             identity: FeiyueIdentityClient::new(identity_url.to_owned()),
+            import_root: Arc::new(import_root),
+            import_max_upload_bytes: 16 * 1024 * 1024,
+            import_max_unpacked_bytes: 64 * 1024 * 1024,
         })
     }
 }

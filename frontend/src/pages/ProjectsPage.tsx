@@ -1,6 +1,6 @@
 import { useDeferredValue, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, Search, Trophy } from 'lucide-react'
+import { ArrowRight, Search } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { listProjects } from '@/api/endpoints/projects'
 import type { ProjectCategory } from '@/api/schemas/project'
@@ -68,7 +68,10 @@ export function ProjectsPage() {
             <div key={item} className="animate-pulse">
               <div className="aspect-[16/10] rounded-lg bg-bg-subtle" />
               <div className="mt-4 h-6 w-3/5 rounded bg-bg-subtle" />
-              <div className="mt-3 h-4 w-full rounded bg-bg-subtle" />
+              <div className="mt-3 flex justify-between gap-3">
+                <div className="h-6 w-24 rounded-full bg-bg-subtle" />
+                <div className="h-6 w-32 rounded-full bg-bg-subtle" />
+              </div>
             </div>
           ))}
 
@@ -79,39 +82,38 @@ export function ProjectsPage() {
         )}
 
         {projects.data?.items.map((project) => (
-          <Link key={project.id} to={`/projects/${project.slug}`} className="group min-w-0">
+          <Link
+            key={project.id}
+            to={`/projects/${project.slug}`}
+            className="group min-w-0 overflow-hidden rounded-xl border border-border bg-bg transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-1 hover:border-border-strong hover:shadow-lg"
+          >
             <ProjectCover
               cover={project}
-              className="aspect-[16/10] transition-transform duration-200 group-hover:-translate-y-1"
+              className="aspect-[4/3] rounded-none transition-transform duration-300 group-hover:scale-[1.015]"
             />
-            <div className="pt-4">
-              <div className="flex items-center justify-between gap-3">
+            <div className="px-4 pb-4 pt-4">
+              <div className="flex items-start justify-between gap-3">
+                <h2 className="relative min-w-0 flex-1 overflow-hidden whitespace-nowrap pr-10 font-serif text-2xl font-semibold leading-tight tracking-[-0.02em] after:pointer-events-none after:absolute after:inset-y-0 after:right-0 after:w-10 after:bg-gradient-to-r after:from-transparent after:to-bg">
+                  {project.name}
+                </h2>
+                <ArrowRight
+                  size={17}
+                  className="mt-1 shrink-0 text-text-faint transition-transform group-hover:translate-x-1"
+                  aria-hidden
+                />
+              </div>
+              <div className="mt-3 flex min-h-7 items-center gap-3">
                 <span
-                  className="text-sm font-semibold"
+                  className="rounded-full bg-bg-subtle px-2.5 py-1 text-sm font-medium"
                   style={{ color: categoryColor(project.primaryCategory) }}
                 >
                   {project.primaryCategory}
                 </span>
-                <ArrowRight
-                  size={17}
-                  className="text-text-faint transition-transform group-hover:translate-x-1"
-                  aria-hidden
-                />
-              </div>
-              <h2 className="mt-2 font-serif text-2xl font-semibold leading-tight tracking-[-0.02em]">
-                {project.name}
-              </h2>
-              <p className="mt-2 line-clamp-2 leading-7 text-text-muted">{project.summary}</p>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {project.tags.slice(0, 3).map((tag) => (
-                  <span key={tag} className="rounded-full bg-bg-subtle px-2.5 py-1 text-sm text-text-muted">
-                    {tag}
+                {competitionTag(project.tags) && (
+                  <span className="ml-auto max-w-[65%] truncate rounded-full border border-border px-2.5 py-1 text-sm text-text-muted">
+                    {competitionTag(project.tags)}
                   </span>
-                ))}
-              </div>
-              <div className="mt-4 flex items-center gap-2 border-t border-border pt-3 text-sm text-text-muted">
-                <Trophy size={15} strokeWidth={1.7} aria-hidden />
-                <span className="truncate">{project.highestAward ?? '暂无获奖记录'}</span>
+                )}
               </div>
             </div>
           </Link>
@@ -125,6 +127,11 @@ export function ProjectsPage() {
       </section>
     </div>
   )
+}
+
+function competitionTag(tags: readonly string[]): string | undefined {
+  const competitions = ['国创赛（互联网+）', '计算机设计大赛', '智能应用技术大赛']
+  return competitions.find((competition) => tags.includes(competition))
 }
 
 function CategoryButton({

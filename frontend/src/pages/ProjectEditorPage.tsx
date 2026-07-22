@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, RefreshCw, Search, Sparkles, Trash2, X } from 'lucide-react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   createProject,
@@ -62,6 +62,7 @@ export function ProjectEditorPage() {
   const { slug } = useParams()
   const editing = Boolean(slug)
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.user)
   const tagAdmin = canManageTags(user)
@@ -71,6 +72,14 @@ export function ProjectEditorPage() {
   const [newTagName, setNewTagName] = useState('')
   const [newTagGroup, setNewTagGroup] = useState('技术')
   const [formError, setFormError] = useState('')
+
+  useEffect(() => {
+    if (editing) return
+    const state = location.state as { importDraft?: Partial<ProjectWriteInput> } | null
+    if (!state?.importDraft) return
+    setForm((current) => ({ ...current, ...state.importDraft }))
+    window.history.replaceState({}, document.title)
+  }, [editing, location.state])
 
   const project = useQuery({
     queryKey: ['project', slug],

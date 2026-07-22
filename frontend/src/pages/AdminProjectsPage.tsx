@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { FileUp, Pencil, Plus, Trash2 } from 'lucide-react'
+import { FileUp, PackageOpen, Pencil, Plus, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { archiveProject, importProjects, listProjects } from '@/api/endpoints/projects'
@@ -67,6 +67,9 @@ export function AdminProjectsPage() {
         </div>
         <div className="flex gap-2">
           {canManageTags(user) && <Button asChild variant="ghost"><Link to="/admin/tags">标签管理</Link></Button>}
+          <Button asChild variant="outline">
+            <Link to="/admin/import"><PackageOpen aria-hidden />一键导入</Link>
+          </Button>
           <Button variant="outline" onClick={() => setShowImport((value) => !value)}>
             <FileUp aria-hidden />
             快速导入

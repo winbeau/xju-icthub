@@ -1,10 +1,11 @@
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
-use crate::{auth, covers, projects, state::AppState, tags};
+use crate::{auth, covers, imports, projects, state::AppState, tags};
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
@@ -15,6 +16,13 @@ pub fn build_router(state: AppState) -> Router {
             get(projects::list).post(projects::create),
         )
         .route("/api/v1/projects/import", post(projects::import))
+        .route(
+            "/api/v1/import-jobs",
+            post(imports::create).layer(DefaultBodyLimit::max(256 * 1024 * 1024)),
+        )
+        .route("/api/v1/import-jobs/{id}", get(imports::detail))
+        .route("/api/v1/import-jobs/{id}/cancel", post(imports::cancel))
+        .route("/api/v1/import-jobs/{id}/refine", post(imports::refine))
         .route("/api/v1/tags", get(tags::list).post(tags::create))
         .route("/api/v1/tags/{id}", axum::routing::patch(tags::update))
         .route("/api/v1/tags/{id}/merge", post(tags::merge))
@@ -44,6 +52,11 @@ async fn health() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Cursor, Write},
+        time::Duration,
+    };
+
     use axum::{
         body::{to_bytes, Body},
         http::{header, Request, StatusCode},
@@ -53,6 +66,7 @@ mod tests {
     use serde_json::{json, Value};
     use tokio::net::TcpListener;
     use tower::ServiceExt;
+    use zip::{write::SimpleFileOptions, ZipWriter};
 
     use super::build_router;
     use crate::state::AppState;
@@ -187,6 +201,175 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn import_jobs_require_authentication() {
+        let state = AppState::for_test().await.expect("test state");
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/import-jobs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("import response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn lab_member_can_upload_zip_and_receive_import_preview() {
+        let identity_url = spawn_identity_service().await;
+        let state = AppState::for_test_with_identity_url(&identity_url)
+            .await
+            .expect("test state");
+        let app = build_router(state);
+        let zip = test_project_zip();
+        let boundary = "icthub-test-boundary";
+        let mut multipart = Vec::new();
+        write!(
+            multipart,
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"vision.zip\"\r\nContent-Type: application/zip\r\n\r\n"
+        )
+        .expect("multipart header");
+        multipart.extend_from_slice(&zip);
+        write!(
+            multipart,
+            "\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"links\"\r\n\r\n[{{\"url\":\"https://github.com/example/source\"}}]\r\n--{boundary}--\r\n"
+        )
+        .expect("multipart footer");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/import-jobs")
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .header(
+                        header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(multipart))
+                    .unwrap(),
+            )
+            .await
+            .expect("create import response");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let bytes = to_bytes(response.into_body(), 128 * 1024)
+            .await
+            .expect("create body");
+        let created: Value = serde_json::from_slice(&bytes).expect("create json");
+        let id = created["id"].as_str().expect("job id");
+
+        let mut completed = None;
+        for _ in 0..100 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/v1/import-jobs/{id}"))
+                        .header(header::AUTHORIZATION, "Bearer member")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .expect("job detail response");
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = to_bytes(response.into_body(), 512 * 1024)
+                .await
+                .expect("detail body");
+            let detail: Value = serde_json::from_slice(&bytes).expect("detail json");
+            if detail["status"] == "completed" {
+                completed = Some(detail);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let detail = completed.expect("import job completed");
+        assert_eq!(
+            detail["result"]["projectDraft"]["primaryCategory"],
+            "AI 软件"
+        );
+        assert_eq!(detail["inputs"][1]["provider"], "github");
+        assert_eq!(detail["inputs"][1]["status"], "pending_parser");
+        assert!(detail["artifacts"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn import_job_can_be_cancelled_and_refinement_prompt_is_saved() {
+        let identity_url = spawn_identity_service().await;
+        let state = AppState::for_test_with_identity_url(&identity_url)
+            .await
+            .expect("test state");
+        sqlx::query(
+            "INSERT INTO import_jobs (
+                id, status, stage, progress, source_kind, source_name, created_by_sid
+             ) VALUES ('cancel-job', 'extracting', '正在安全整理附件', 18, 'mixed',
+                '测试附件', '20211010001')",
+        )
+        .execute(&state.db)
+        .await
+        .expect("cancel job");
+        sqlx::query(
+            "INSERT INTO import_jobs (
+                id, status, stage, progress, source_kind, source_name, created_by_sid
+             ) VALUES ('refine-job', 'completed', '等待确认', 100, 'prompt',
+                '项目简介', '20211010001')",
+        )
+        .execute(&state.db)
+        .await
+        .expect("refine job");
+        let app = build_router(state.clone());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/import-jobs/cancel-job/cancel")
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("cancel response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let status = sqlx::query_scalar::<_, String>(
+            "SELECT status FROM import_jobs WHERE id = 'cancel-job'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .expect("cancelled status");
+        assert_eq!(status, "cancelled");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/import-jobs/refine-job/refine")
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({ "prompt": "负责人：张三\n来源：课程项目" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("refine response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let saved_prompt = sqlx::query_scalar::<_, String>(
+            "SELECT source_ref FROM import_inputs WHERE job_id = 'refine-job'
+                AND display_name = '整理补充提示'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .expect("saved refinement");
+        assert_eq!(saved_prompt, "负责人：张三\n来源：课程项目");
+    }
+
+    #[tokio::test]
     async fn initial_competition_tags_exist_and_member_cannot_create_formal_tag() {
         let identity_url = spawn_identity_service().await;
         let state = AppState::for_test_with_identity_url(&identity_url)
@@ -279,6 +462,23 @@ mod tests {
             axum::serve(listener, app).await.expect("identity server");
         });
         format!("http://{address}")
+    }
+
+    fn test_project_zip() -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default();
+        writer
+            .start_file("vision/README.md", options)
+            .expect("readme entry");
+        writer
+            .write_all("基于 YOLO 和 OpenCV 的视觉识别项目".as_bytes())
+            .expect("readme");
+        writer
+            .start_file("vision/src/main.py", options)
+            .expect("source entry");
+        writer.write_all(b"print('ok')").expect("source");
+        writer.finish().expect("finish zip").into_inner()
     }
 
     #[allow(dead_code)]

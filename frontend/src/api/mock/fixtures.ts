@@ -13,7 +13,13 @@ export const PROJECT_FIXTURES: readonly ProjectDetail[] = [
     name: '多模态巡检机器人', summary: '面向实验室和机房的视觉巡检、异常识别与远程处置系统。',
     highestAward: '国创赛省赛银奖', status: '研发中', critique: '现场稳定性决定它能否真正投入使用。',
     ownerName: '机器人项目组', sourceName: '2023 届项目组', tags: ['机器人', '计算机视觉', '国创赛（互联网+）'],
-    resources: [{ id: 'r1', type: 'github', title: 'GitHub 主仓库', url: 'https://github.com/example/robot' }],
+    resources: [
+      { id: 'r1', type: 'github', title: '项目代码仓库', url: 'https://github.com/example/robot' },
+      { id: 'r1-doc', type: 'document', title: '项目设计说明书', url: 'https://example.com/robot-document.pdf' },
+      { id: 'r1-ppt', type: 'presentation', title: '国创赛答辩 PPT', url: 'https://example.com/robot-presentation.pptx' },
+      { id: 'r1-video', type: 'video', title: '巡检流程展示视频', url: 'https://example.com/robot-demo.mp4' },
+      { id: 'r1-poster', type: 'image', title: '项目展示海报', url: 'https://example.com/robot-poster.png' },
+    ],
     ...cover, coverTitle: '智能巡检', coverSubtitle: '机房异常识别与远程处置', coverKeywords: ['机器人', '计算机视觉', '物联网'], coverTone: 'amber',
   },
   {

@@ -11,6 +11,7 @@ import { TagCreateInputSchema, type TagDefinition } from '@/api/schemas/tag'
 import { buildCoverPreview } from '@/lib/covers'
 import { canManageTags } from '@/api/schemas/user'
 import { filterProjects } from '@/lib/projects'
+import type { ImportJob } from '@/api/schemas/importJob'
 
 function mockUser(sid: string): User {
   const superadmin = sid === '20211019999'
@@ -60,6 +61,8 @@ let mockTags: TagDefinition[] = [
   ['source-competition', '比赛项目', '来源'], ['source-lab', '实验室建设', '来源'], ['source-course', '课程项目', '来源'],
   ['source-tool', '日常工具', '来源'], ['source-personal', '个人探索', '来源'], ['source-service', '对外服务', '来源'],
 ].map(([id, name, groupName], index) => ({ id: id!, name: name!, groupName: groupName!, color: null, sortOrder: index, isActive: true, mergedIntoId: null }))
+
+const mockImportJobs: Record<string, ImportJob> = {}
 
 function requireMember(headers: Headers): User {
   const token = headers.get('Authorization')?.replace(/^Bearer\s+/i, '')
@@ -230,6 +233,200 @@ registerMock('POST', '/api/v1/tag-suggestions', ({ body, headers }) => {
   const name = (body as { name?: unknown })?.name
   if (typeof name !== 'string' || !name.trim()) throw new ApiError('建议标签名称不能为空', 400, '/api/v1/tag-suggestions')
   return { id: crypto.randomUUID(), status: 'pending' }
+})
+
+registerMock('POST', '/api/v1/import-jobs', ({ body, headers }) => {
+  requireMember(headers)
+  const form = body as FormData
+  const files = form.getAll('file').filter((value): value is File => value instanceof File)
+  const id = crypto.randomUUID()
+  const now = new Date().toISOString()
+  const rawPrompt = form.get('prompt')
+  const prompt = typeof rawPrompt === 'string' ? rawPrompt.trim() : ''
+  const rawLinks = form.get('links')
+  const links = typeof rawLinks === 'string'
+    ? (JSON.parse(rawLinks) as Array<{ url: string; title?: string }>)
+    : []
+  if (!files.length && !links.length && !prompt) {
+    throw new ApiError('请至少填写简介、链接或上传一个附件', 400, '/api/v1/import-jobs')
+  }
+  const artifacts = files.map((file) => {
+    const kind = mockArtifactKind(file.name)
+    return {
+      id: crypto.randomUUID(),
+      relativePath: file.name,
+      artifactKind: kind,
+      mimeType: file.type || null,
+      sizeBytes: file.size,
+      extractor: kind === 'document' ? 'text_preview' : 'file_index',
+      isCoverCandidate: kind === 'image',
+    }
+  })
+  const sourceName = files.length
+    ? files.length === 1
+      ? files[0]!.name
+      : `${files[0]!.name} 等 ${files.length} 个附件`
+    : links[0]?.url ?? '项目简介'
+  const projectName =
+    files[0]?.name.replace(/\.[^.]+$/i, '')
+    || prompt.match(/(?:项目名|项目名称|名称)\s*[:：]\s*([^\n。；;]+)/)?.[1]?.trim()
+    || '待识别项目'
+  const job: ImportJob = {
+    id,
+    status: 'completed',
+    stage: '等待确认',
+    progress: 100,
+    sourceKind:
+      files.length === 1 && files[0]!.name.toLowerCase().endsWith('.zip')
+        ? 'zip'
+        : files.length
+          ? 'mixed'
+          : links.length
+            ? 'link'
+            : 'prompt',
+    sourceName,
+    analysisEngine: 'deterministic_fallback',
+    errorMessage: null,
+    createdAt: now,
+    updatedAt: now,
+    inputs: [
+      ...files.map((file) => ({
+        id: crypto.randomUUID(), inputKind: 'file' as const, provider: 'upload', displayName: file.name,
+        sourceRef: null, mimeType: file.type || 'application/octet-stream', sizeBytes: file.size, status: 'parsed',
+      })),
+      ...(prompt ? [{
+        id: crypto.randomUUID(), inputKind: 'prompt' as const, provider: 'user', displayName: '项目简介',
+        sourceRef: prompt, mimeType: null, sizeBytes: null, status: 'parsed',
+      }] : []),
+      ...links.map((link) => ({
+        id: crypto.randomUUID(), inputKind: 'link' as const,
+        provider: link.url.includes('github.com') ? 'github' : link.url.includes('baidu') ? 'baidu' : 'web',
+        displayName: link.title || link.url, sourceRef: link.url, mimeType: null, sizeBytes: null,
+        status: 'pending_parser',
+      })),
+    ],
+    artifacts,
+    result: {
+      projectDraft: {
+        name: projectName, slug: `import-${id.slice(0, 8)}`,
+        summary: files.length
+          ? `项目材料中识别到 ${files.length} 个附件，等待进一步理解与确认。`
+          : '已收集项目简介与链接，等待进一步理解与确认。',
+        primaryCategory: '传统软件',
+        suggestedTags: mockExplicitTags(prompt),
+        ownerName: mockExplicitField(prompt, ['当前负责', '负责人', '维护者']),
+        sourceName: mockExplicitField(prompt, ['来源者', '来源方', '来源']),
+        highestAward: mockExplicitField(prompt, ['最高奖项', '获奖', '奖项']),
+        status: '待确认',
+      },
+      artifactSummary: summarizeMockArtifacts(artifacts),
+      warnings: ['当前使用确定性回退生成草稿；配置 Codex 后将补充语义摘要、奖项识别和更准确的分类。', 'PPT、文档和视频已完成文件级归类，内容抽取器将在 Agent 链路配置阶段接入。'],
+      agent: { status: 'awaiting_configuration', mode: 'deterministic_fallback', message: '材料收集与安全归类链路已打通，等待配置 Codex Base URL 与 API Token。' },
+      capabilities: { zipUpload: 'prototype_ready', githubLink: 'input_reserved', mixedFiles: 'prototype_ready', codexAgent: 'awaiting_configuration', githubPublish: 'awaiting_credentials' },
+    },
+  }
+  mockImportJobs[id] = job
+  return job
+})
+
+function mockArtifactKind(name: string): ImportJob['artifacts'][number]['artifactKind'] {
+  const extension = name.split('.').pop()?.toLowerCase() ?? ''
+  if (['ppt', 'pptx', 'key', 'odp'].includes(extension)) return 'presentation'
+  if (['pdf', 'doc', 'docx', 'odt', 'rtf', 'md', 'txt', 'tex'].includes(extension)) return 'document'
+  if (['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'wmv'].includes(extension)) return 'video'
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'tiff'].includes(extension)) return 'image'
+  if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(extension)) return 'archive'
+  if (['rs', 'ts', 'tsx', 'js', 'jsx', 'py', 'java', 'go', 'c', 'cpp', 'h', 'hpp', 'html', 'css', 'sql'].includes(extension)) return 'code'
+  return 'other'
+}
+
+function mockExplicitTags(prompt: string): string[] {
+  const formalTags = new Set([
+    '国创赛（互联网+）', '计算机设计大赛', '智能应用技术大赛', '大数据',
+    '人工智能应用', 'LLM/Agent', '计算机视觉', 'NLP', '物联网', '嵌入式',
+    '机器人', 'Web', '移动端', '3D/VR', '软硬结合', 'AI核心', 'AI增强',
+    '非AI', '开源项目', '校园服务', '教育', '农业', '医疗', '文旅', '工业',
+    '科研辅助', '比赛项目', '实验室建设', '课程项目', '日常工具', '个人探索',
+    '对外服务',
+  ])
+  const value = mockExplicitField(prompt, ['标签', '项目标签'])
+  if (!value) return []
+  return value
+    .split(/[,，、/|]/)
+    .map((tag) => tag.trim())
+    .filter((tag) => formalTags.has(tag))
+    .slice(0, 3)
+}
+
+function mockExplicitField(prompt: string, labels: string[]): string | null {
+  for (const line of prompt.split(/\r?\n/)) {
+    const match = line.trim().match(/^([^:：]+)[:：]\s*(.+)$/)
+    if (!match || !labels.includes(match[1]!.trim())) continue
+    const value = match[2]!.split(/[。；;]/)[0]?.trim()
+    if (value) return [...value].slice(0, 120).join('')
+  }
+  return null
+}
+
+function summarizeMockArtifacts(artifacts: ImportJob['artifacts']) {
+  const totals = new Map<
+    ImportJob['artifacts'][number]['artifactKind'],
+    { count: number; totalBytes: number }
+  >()
+  for (const artifact of artifacts) {
+    const current = totals.get(artifact.artifactKind) ?? { count: 0, totalBytes: 0 }
+    current.count += 1
+    current.totalBytes += artifact.sizeBytes
+    totals.set(artifact.artifactKind, current)
+  }
+  return [...totals].map(([kind, value]) => ({ kind, ...value }))
+}
+
+registerMock('GET', '/api/v1/import-jobs/:id', ({ path, headers }) => {
+  requireMember(headers)
+  const id = decodeURIComponent(path.split('/').at(-1) ?? '')
+  const job = mockImportJobs[id]
+  if (!job) throw new ApiError('导入任务不存在', 404, path)
+  return job
+})
+
+registerMock('POST', '/api/v1/import-jobs/:id/cancel', ({ path, headers }) => {
+  requireMember(headers)
+  const id = decodeURIComponent(path.split('/').at(-2) ?? '')
+  const job = mockImportJobs[id]
+  if (!job) throw new ApiError('导入任务不存在', 404, path)
+  if (['completed', 'failed', 'cancelled'].includes(job.status)) {
+    throw new ApiError('该整理任务已经结束', 409, path)
+  }
+  job.status = 'cancelled'
+  job.stage = '已取消'
+  job.updatedAt = new Date().toISOString()
+  return job
+})
+
+registerMock('POST', '/api/v1/import-jobs/:id/refine', ({ path, headers, body }) => {
+  requireMember(headers)
+  const id = decodeURIComponent(path.split('/').at(-2) ?? '')
+  const job = mockImportJobs[id]
+  if (!job) throw new ApiError('导入任务不存在', 404, path)
+  if (job.status !== 'completed') {
+    throw new ApiError('请等待整理流程完成后再提交补充提示', 409, path)
+  }
+  const prompt = (body as { prompt?: unknown })?.prompt
+  if (typeof prompt !== 'string' || !prompt.trim()) {
+    throw new ApiError('补充提示词不能为空', 400, path)
+  }
+  job.inputs = [
+    ...job.inputs.filter((input) => input.displayName !== '整理补充提示'),
+    {
+      id: crypto.randomUUID(), inputKind: 'prompt', provider: 'user',
+      displayName: '整理补充提示', sourceRef: prompt.trim(), mimeType: null,
+      sizeBytes: null, status: 'queued_codex',
+    },
+  ]
+  job.stage = '补充提示已保存，等待 Codex'
+  job.updatedAt = new Date().toISOString()
+  return job
 })
 
 registerMock('POST', '/api/v1/projects/:slug/cover/generate', ({ path, headers }) => {
