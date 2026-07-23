@@ -192,11 +192,22 @@ impl ImportAgentRunner for CodexExecRunner {
         })
     }
 
-    async fn run(&self, request: AgentRunRequest) -> anyhow::Result<AgentRunOutcome> {
+    async fn run(&self, mut request: AgentRunRequest) -> anyhow::Result<AgentRunOutcome> {
         if !self.enabled() {
             bail!("Codex runner is disabled");
         }
+        let process_dir = std::env::current_dir()
+            .context("failed to resolve the Codex worker process directory")?;
+        request.analysis_dir = absolute_from(&process_dir, &request.analysis_dir);
         tokio::fs::create_dir_all(&request.analysis_dir).await?;
+        request.analysis_dir = tokio::fs::canonicalize(&request.analysis_dir)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to resolve the Codex analysis directory {}",
+                    request.analysis_dir.display()
+                )
+            })?;
         let runtime_home = self.prepare_runtime_home(&request.run_id).await?;
 
         let api_key = if let Some(api_key_file) = self.config.api_key_file.as_deref() {
@@ -295,6 +306,14 @@ impl ImportAgentRunner for CodexExecRunner {
             result,
             raw_events_path,
         })
+    }
+}
+
+fn absolute_from(base: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
     }
 }
 
@@ -468,6 +487,19 @@ mod tests {
 
         assert!(runner.config.binary.is_absolute());
         assert!(runner.config.binary.ends_with(Path::new("tools/codex")));
+    }
+
+    #[test]
+    fn relative_analysis_paths_are_resolved_before_the_child_changes_directory() {
+        let base = Path::new("/srv/icthub/backend");
+        let relative = Path::new("uploads/imports/job-1/analysis");
+        assert_eq!(
+            absolute_from(base, relative),
+            base.join("uploads/imports/job-1/analysis")
+        );
+
+        let absolute = base.join("uploads/imports/job-2/analysis");
+        assert_eq!(absolute_from(base, &absolute), absolute);
     }
 
     #[tokio::test]
