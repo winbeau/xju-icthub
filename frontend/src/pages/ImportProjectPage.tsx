@@ -426,6 +426,11 @@ function JobResult({
                           >
                             {artifact.displayPath}
                           </span>
+                          {isHtmlPresentationArtifact(artifact) && (
+                            <span className="shrink-0 rounded bg-bg-subtle px-2 py-0.5 text-xs text-text-faint">
+                              HTML 演示
+                            </span>
+                          )}
                           {artifact.isCoverCandidate && (
                             <span className="rounded bg-bg-subtle px-2 py-0.5 text-xs text-text-faint">
                               封面候选
@@ -672,11 +677,19 @@ function artifactResource(artifact: ImportArtifact): ProjectResourceInput {
       archive: 'archive',
     } as const
   )[artifact.artifactKind as 'document' | 'presentation' | 'video' | 'image' | 'archive']
+  const pathParts = artifact.displayPath.split('/')
+  const title = isHtmlPresentationArtifact(artifact)
+    ? `${pathParts.at(-2) ?? 'HTML'} 演示`
+    : (pathParts.at(-1) ?? artifact.displayPath)
   return {
     type,
-    title: artifact.displayPath.split('/').at(-1) ?? artifact.displayPath,
+    title,
     url: null,
   }
+}
+
+function isHtmlPresentationArtifact(artifact: ImportArtifact): boolean {
+  return artifact.artifactKind === 'presentation' && /\.html?$/i.test(artifact.displayPath)
 }
 
 function formatBytes(bytes: number): string {

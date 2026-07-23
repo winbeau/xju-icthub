@@ -2468,14 +2468,26 @@ async fn upgrade_analysis_bundle_paths(bundle_path: &Path) -> anyhow::Result<()>
                 continue;
             };
             let display_path = compact_artifact_display_path(relative_path);
-            if artifact["displayPath"].as_str() != Some(display_path.as_str()) {
+            let is_html_presentation = is_html_presentation_entry(Path::new(relative_path));
+            let display_changed = artifact["displayPath"].as_str() != Some(display_path.as_str());
+            let kind_changed =
+                is_html_presentation && artifact["artifactKind"].as_str() != Some("presentation");
+            if display_changed || kind_changed {
                 let object = artifact
                     .as_object_mut()
                     .context("analysis bundle artifact is not an object")?;
-                object.insert(
-                    "displayPath".to_owned(),
-                    serde_json::Value::String(display_path),
-                );
+                if display_changed {
+                    object.insert(
+                        "displayPath".to_owned(),
+                        serde_json::Value::String(display_path),
+                    );
+                }
+                if kind_changed {
+                    object.insert(
+                        "artifactKind".to_owned(),
+                        serde_json::Value::String("presentation".to_owned()),
+                    );
+                }
                 changed = true;
             }
         }
@@ -2764,7 +2776,9 @@ fn artifact_kind(path: &Path) -> &'static str {
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
-    if matches!(extension.as_str(), "ppt" | "pptx" | "key" | "odp") {
+    if matches!(extension.as_str(), "ppt" | "pptx" | "key" | "odp")
+        || is_html_presentation_entry(path)
+    {
         "presentation"
     } else if matches!(
         extension.as_str(),
@@ -2796,6 +2810,52 @@ fn artifact_kind(path: &Path) -> &'static str {
     } else {
         "other"
     }
+}
+
+fn is_html_presentation_entry(path: &Path) -> bool {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "html" | "htm") {
+        return false;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !matches!(
+        file_name.as_str(),
+        "index.html"
+            | "index.htm"
+            | "slides.html"
+            | "slides.htm"
+            | "presentation.html"
+            | "presentation.htm"
+            | "deck.html"
+            | "deck.htm"
+    ) {
+        return false;
+    }
+    path.parent().is_some_and(|parent| {
+        parent.components().any(|component| {
+            let Component::Normal(value) = component else {
+                return false;
+            };
+            matches!(
+                value.to_string_lossy().to_ascii_lowercase().as_str(),
+                "ppt-html"
+                    | "ppt_html"
+                    | "ppthtml"
+                    | "html-ppt"
+                    | "slides-html"
+                    | "web-slides"
+                    | "slide-deck"
+            )
+        })
+    })
 }
 
 fn is_source_extension(extension: &str) -> bool {
@@ -3076,11 +3136,16 @@ pub(crate) async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResp
         .into_iter()
         .map(|row| {
             let display_path = compact_artifact_display_path(&row.relative_path);
+            let artifact_kind = if is_html_presentation_entry(Path::new(&row.relative_path)) {
+                "presentation".to_owned()
+            } else {
+                row.artifact_kind
+            };
             ImportArtifactView {
                 id: row.id,
                 relative_path: row.relative_path,
                 display_path,
-                artifact_kind: row.artifact_kind,
+                artifact_kind,
                 mime_type: row.mime_type,
                 size_bytes: row.size_bytes,
                 extractor: row.extractor,
@@ -3224,6 +3289,10 @@ mod tests {
                     "relativePath": "项目/作品.__contents/项目/src/main.py",
                     "textExcerpt": "不可丢失的正文",
                     "metadata": {"lineCount": 12}
+                }, {
+                    "relativePath": "项目/介绍.__contents/项目/ppt-html/index.html",
+                    "artifactKind": "code",
+                    "textExcerpt": "HTML 幻灯片正文"
                 }],
                 "fallbackAnalysis": {"warnings": ["保留原警告"]}
             }))
@@ -3246,6 +3315,11 @@ mod tests {
         );
         assert_eq!(upgraded["artifacts"][0]["textExcerpt"], "不可丢失的正文");
         assert_eq!(upgraded["fallbackAnalysis"]["warnings"][0], "保留原警告");
+        assert_eq!(
+            upgraded["artifacts"][1]["displayPath"],
+            "介绍/ppt-html/index.html"
+        );
+        assert_eq!(upgraded["artifacts"][1]["artifactKind"], "presentation");
     }
 
     #[test]
@@ -3292,6 +3366,15 @@ mod tests {
         assert_eq!(artifact_kind(Path::new("src/main.rs")), "code");
         assert_eq!(artifact_kind(Path::new("docs/report.pdf")), "document");
         assert_eq!(artifact_kind(Path::new("答辩.pptx")), "presentation");
+        assert_eq!(
+            artifact_kind(Path::new("介绍/ppt-html/index.html")),
+            "presentation"
+        );
+        assert_eq!(
+            artifact_kind(Path::new("介绍/ppt-html/assets/runtime.js")),
+            "code"
+        );
+        assert_eq!(artifact_kind(Path::new("web/index.html")), "code");
         assert_eq!(artifact_kind(Path::new("demo.mp4")), "video");
         assert_eq!(artifact_kind(Path::new("poster.png")), "image");
     }
