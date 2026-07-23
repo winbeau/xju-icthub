@@ -41,9 +41,11 @@ impl CodexExecRunner {
         if config.enabled {
             if config.base_url.as_deref().is_none_or(str::is_empty)
                 || config.model.as_deref().is_none_or(str::is_empty)
-                || config.api_key_file.is_none()
             {
-                bail!("enabled Codex runner is missing base URL, model, or API key file");
+                bail!("enabled Codex runner is missing base URL or model");
+            }
+            if config.api_key_file.is_none() && !config.codex_home.join("auth.json").is_file() {
+                bail!("enabled Codex runner requires an API key file or CODEX_HOME/auth.json");
             }
             let base_url = config.base_url.as_deref().expect("checked above");
             let url = reqwest::Url::parse(base_url).context("invalid Codex base URL")?;
@@ -143,23 +145,23 @@ impl ImportAgentRunner for CodexExecRunner {
         tokio::fs::create_dir_all(&request.analysis_dir).await?;
         tokio::fs::create_dir_all(&self.config.codex_home).await?;
 
-        let api_key_file = self
-            .config
-            .api_key_file
-            .as_deref()
-            .context("Codex API key file is not configured")?;
-        let api_key = tokio::fs::read_to_string(api_key_file)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to read Codex API key file {}",
-                    api_key_file.display()
-                )
-            })?;
-        let api_key = api_key.trim();
-        if api_key.is_empty() {
-            bail!("Codex API key file is empty");
-        }
+        let api_key = if let Some(api_key_file) = self.config.api_key_file.as_deref() {
+            let value = tokio::fs::read_to_string(api_key_file)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to read Codex API key file {}",
+                        api_key_file.display()
+                    )
+                })?;
+            let value = value.trim().to_owned();
+            if value.is_empty() {
+                bail!("Codex API key file is empty");
+            }
+            Some(value)
+        } else {
+            None
+        };
 
         let schema_path = request
             .analysis_dir
@@ -175,7 +177,6 @@ impl ImportAgentRunner for CodexExecRunner {
         let mut command = Command::new(&self.config.binary);
         command
             .args(self.command_args(&request, &schema_path, &result_path)?)
-            .env("CODEX_API_KEY", api_key)
             .env("CODEX_HOME", &self.config.codex_home)
             .env_remove("GH_TOKEN")
             .env_remove("GITHUB_TOKEN")
@@ -184,6 +185,9 @@ impl ImportAgentRunner for CodexExecRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        if let Some(api_key) = api_key.as_deref() {
+            command.env("CODEX_API_KEY", api_key);
+        }
         let mut child = command.spawn().with_context(|| {
             format!(
                 "failed to start pinned Codex binary {}",
@@ -323,6 +327,26 @@ mod tests {
         assert!(args.contains(&"--ignore-rules".to_owned()));
         assert!(args.contains(&"shell_environment_policy.ignore_default_excludes=false".to_owned()));
         assert!(!args.join(" ").contains("codex-api-key"));
+    }
+
+    #[test]
+    fn runner_accepts_native_codex_home_auth() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            directory.path().join("auth.json"),
+            r#"{"OPENAI_API_KEY":"not-used-by-this-test"}"#,
+        )
+        .expect("auth file");
+        let runner = CodexExecRunner::new(CodexExecConfig {
+            enabled: true,
+            binary: PathBuf::from("codex"),
+            codex_home: directory.path().to_path_buf(),
+            base_url: Some("https://api.example.test/v1".to_owned()),
+            model: Some("configured-model".to_owned()),
+            api_key_file: None,
+            timeout: Duration::from_secs(600),
+        });
+        assert!(runner.is_ok());
     }
 
     #[tokio::test]

@@ -63,10 +63,15 @@ impl Config {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
         let codex_timeout_secs = env_u64("ICTHUB_CODEX_TIMEOUT_SECS", 600)?;
-        if codex_enabled
-            && (codex_base_url.is_none() || codex_model.is_none() || codex_api_key_file.is_none())
+        if codex_enabled && (codex_base_url.is_none() || codex_model.is_none()) {
+            return Err(
+                "ICTHUB_CODEX_ENABLED=true requires ICTHUB_CODEX_BASE_URL and ICTHUB_CODEX_MODEL"
+                    .into(),
+            );
+        }
+        if codex_enabled && codex_api_key_file.is_none() && !codex_home.join("auth.json").is_file()
         {
-            return Err("ICTHUB_CODEX_ENABLED=true requires ICTHUB_CODEX_BASE_URL, ICTHUB_CODEX_MODEL, and ICTHUB_CODEX_API_KEY_FILE".into());
+            return Err("ICTHUB_CODEX_ENABLED=true requires either ICTHUB_CODEX_API_KEY_FILE or ICTHUB_CODEX_HOME/auth.json".into());
         }
         Ok(Self {
             bind_addr,

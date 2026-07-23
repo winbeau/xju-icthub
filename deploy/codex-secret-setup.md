@@ -13,7 +13,16 @@
 
 ## 2. 写入密钥
 
-由管理员在服务器上执行，内容只写入 root 可控文件；下面的占位符不要原样执行：
+如果已经有 Codex 原生配置目录，优先直接使用，不复制密钥：
+
+```bash
+chmod 0700 ~/codex-config
+chmod 0600 ~/codex-config/config.toml ~/codex-config/auth.json
+```
+
+此时设置 `ICTHUB_CODEX_HOME=/home/winbeau/codex-config`，不配置
+`ICTHUB_CODEX_API_KEY_FILE`。如果没有原生 `auth.json`，再由管理员创建独立密钥文件；下面
+的占位符不要原样执行：
 
 ```bash
 sudo install -d -m 0750 /etc/icthub
@@ -32,11 +41,16 @@ sudo chown winbeau:winbeau /etc/icthub/codex-api-key
 ```dotenv
 ICTHUB_CODEX_ENABLED=true
 ICTHUB_CODEX_BIN=tools/codex
-ICTHUB_CODEX_HOME=data/codex-home
+ICTHUB_CODEX_HOME=/home/winbeau/codex-config
 ICTHUB_CODEX_BASE_URL=https://模型代理/v1
 ICTHUB_CODEX_MODEL=管理员确认的模型名
-ICTHUB_CODEX_API_KEY_FILE=/etc/icthub/codex-api-key
 ICTHUB_CODEX_TIMEOUT_SECS=600
+```
+
+使用独立密钥文件时，再增加：
+
+```dotenv
+ICTHUB_CODEX_API_KEY_FILE=/etc/icthub/codex-api-key
 ```
 
 Base URL 必须是 HTTP(S) 绝对地址；模型名必须由管理员确认。程序只把 Base URL 的 origin

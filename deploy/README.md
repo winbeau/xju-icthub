@@ -34,17 +34,19 @@ RUST_LOG=icthub_server=info,tower_http=info
 
 Codex 已固定在 `vendor/codex` 的版本提交，构建脚本会编译 `codex exec` 并放到
 `backend/tools/codex`。首测阶段保持 `ICTHUB_CODEX_ENABLED=false`；本地整理草稿仍然可用。
-需要启用真实 Agent 时，先在服务器上创建只读密钥文件，再在 `backend/.env` 增加：
+需要启用真实 Agent 时，如果服务器已有 Codex 原生配置目录，可直接在 `backend/.env` 增加：
 
 ```dotenv
 ICTHUB_CODEX_ENABLED=true
 ICTHUB_CODEX_BASE_URL=https://你的模型代理/v1
 ICTHUB_CODEX_MODEL=管理员确认的模型名
-ICTHUB_CODEX_API_KEY_FILE=/etc/icthub/codex-api-key
+ICTHUB_CODEX_HOME=/home/winbeau/codex-config
 ```
 
-密钥文件建议由服务用户拥有、权限为 `0600`，不要放入仓库、SQLite 或任务目录。Worker
-启动 Codex 时才读取该文件；Codex 的子工具环境使用 `core` 环境白名单并启用默认
+当 `ICTHUB_CODEX_HOME` 中已有 Codex 原生 `auth.json` 时，无需复制或导出 API Key；配置目录
+应为 `0700`，`auth.json` 和 `config.toml` 应为 `0600`。也可以改用
+`ICTHUB_CODEX_API_KEY_FILE=/etc/icthub/codex-api-key`。凭据不要放入仓库、SQLite 或任务目录。
+Codex 的子工具环境使用 `core` 环境白名单并启用默认
 `KEY/SECRET/TOKEN` 排除，避免把模型凭据泄露给附件中的命令或脚本。`ICTHUB_CODEX_HOME`
 只用于隔离 Codex 运行状态。真实调用前还需要人工确认 Base URL、模型名和配额。
 
