@@ -24,7 +24,8 @@ ReadWritePaths=/home/winbeau/xju-icthub/backend/data
 ReadWritePaths=/home/winbeau/xju-icthub/backend/uploads
 CapabilityBoundingSet=
 LockPersonality=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Bubblewrap uses NETLINK_ROUTE to configure loopback inside the Codex read-only sandbox.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 
 [Install]
