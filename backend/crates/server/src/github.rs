@@ -133,9 +133,76 @@ impl GhCliPublisher {
             .command_output(program, args, cwd, token, label)
             .await?;
         if !output.status.success() {
-            bail!("{label} failed with status {}", output.status);
+            let detail = command_error_detail(&output.stderr, token);
+            bail!("{label} failed with status {}: {detail}", output.status);
         }
         Ok(output)
+    }
+
+    async fn run_authenticated_git(
+        &self,
+        args: &[&OsStr],
+        cwd: &Path,
+        token: &str,
+        label: &str,
+    ) -> anyhow::Result<std::process::Output> {
+        let mut command = Command::new(&self.config.git_bin);
+        command
+            .args(args)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env("GH_TOKEN", token)
+            .env("GITHUB_TOKEN", token)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "credential.https://github.com.helper")
+            .env("GIT_CONFIG_VALUE_0", "!gh auth git-credential");
+        let output = tokio::time::timeout(self.config.timeout, command.output())
+            .await
+            .with_context(|| format!("{label} timed out"))?
+            .with_context(|| format!("failed to start {label}"))?;
+        if !output.status.success() {
+            let detail = command_error_detail(&output.stderr, Some(token));
+            bail!("{label} failed with status {}: {detail}", output.status);
+        }
+        Ok(output)
+    }
+
+    async fn push_repository(
+        &self,
+        full_name: &str,
+        staging_dir: &Path,
+        token: &str,
+    ) -> anyhow::Result<()> {
+        let remote_url = format!("https://github.com/{full_name}.git");
+        self.run_command(
+            &self.config.git_bin,
+            &[
+                OsStr::new("remote"),
+                OsStr::new("add"),
+                OsStr::new("origin"),
+                OsStr::new(&remote_url),
+            ],
+            staging_dir,
+            None,
+            "git remote add",
+        )
+        .await?;
+        self.run_authenticated_git(
+            &[
+                OsStr::new("push"),
+                OsStr::new("--set-upstream"),
+                OsStr::new("origin"),
+                OsStr::new("main"),
+            ],
+            staging_dir,
+            token,
+            "git push",
+        )
+        .await?;
+        Ok(())
     }
 
     async fn command_output(
@@ -266,7 +333,7 @@ impl GitHubPublisher for GhCliPublisher {
                         OsStr::new("view"),
                         OsStr::new(&full_name),
                         OsStr::new("--json"),
-                        OsStr::new("description,isPrivate,url"),
+                        OsStr::new("description,isPrivate,url,defaultBranchRef"),
                     ],
                     &staging_dir,
                     Some(&token),
@@ -283,6 +350,14 @@ impl GitHubPublisher for GhCliPublisher {
                     .map(str::to_owned)
                     .unwrap_or_else(|| format!("https://github.com/{full_name}"));
                 if same_job && is_private {
+                    if repository_is_empty(&metadata) {
+                        self.push_repository(&full_name, &staging_dir, &token)
+                            .await?;
+                        return Ok(GitHubPublishOutcome {
+                            repo_url,
+                            commit_sha,
+                        });
+                    }
                     let commits_endpoint = format!("repos/{full_name}/commits/HEAD");
                     let remote_head = self
                         .run_command(
@@ -316,11 +391,6 @@ impl GitHubPublisher for GhCliPublisher {
                     OsStr::new("create"),
                     OsStr::new(&full_name),
                     OsStr::new("--private"),
-                    OsStr::new("--source"),
-                    OsStr::new("."),
-                    OsStr::new("--remote"),
-                    OsStr::new("origin"),
-                    OsStr::new("--push"),
                     OsStr::new("--description"),
                     OsStr::new(&description),
                 ],
@@ -329,6 +399,8 @@ impl GitHubPublisher for GhCliPublisher {
                 "gh repo create",
             )
             .await?;
+            self.push_repository(&full_name, &staging_dir, &token)
+                .await?;
             Ok(GitHubPublishOutcome {
                 repo_url: format!("https://github.com/{full_name}"),
                 commit_sha,
@@ -673,6 +745,24 @@ fn numbered_repo_name(state: &AppState, number: i64, project_slug: &str) -> Stri
     base.chars().take(MAX_REPO_NAME_CHARS).collect()
 }
 
+fn repository_is_empty(metadata: &serde_json::Value) -> bool {
+    metadata
+        .pointer("/defaultBranchRef/name")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(str::is_empty)
+}
+
+fn command_error_detail(stderr: &[u8], token: Option<&str>) -> String {
+    let mut detail = String::from_utf8_lossy(stderr).trim().to_owned();
+    if let Some(token) = token.filter(|token| !token.is_empty()) {
+        detail = detail.replace(token, "[redacted]");
+    }
+    if detail.is_empty() {
+        return "no stderr output".to_owned();
+    }
+    detail.chars().take(2_000).collect()
+}
+
 fn resolve_source_root(
     import_root: &Path,
     job_id: &str,
@@ -971,6 +1061,30 @@ mod tests {
             source_ref_from_results(Some(&agent.to_string()), None).as_deref(),
             Some("project/source.zip")
         );
+    }
+
+    #[test]
+    fn empty_github_repository_is_detected_for_recovery_push() {
+        let metadata = serde_json::json!({
+            "description": "ICTHub import job example",
+            "isPrivate": true,
+            "defaultBranchRef": {"name": ""}
+        });
+
+        assert!(repository_is_empty(&metadata));
+        assert!(!repository_is_empty(&serde_json::json!({
+            "defaultBranchRef": {"name": "main"}
+        })));
+    }
+
+    #[test]
+    fn command_errors_redact_the_github_token() {
+        let detail = command_error_detail(
+            b"authentication failed for github_pat_secret_value",
+            Some("github_pat_secret_value"),
+        );
+
+        assert_eq!(detail, "authentication failed for [redacted]");
     }
 
     #[test]
