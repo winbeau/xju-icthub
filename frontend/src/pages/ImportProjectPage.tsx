@@ -18,7 +18,7 @@ import {
   RotateCcw,
   Workflow,
 } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   cancelImportJob,
@@ -42,12 +42,13 @@ const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 
 export function ImportProjectPage() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const [prompt, setPrompt] = useState('')
   const [linkText, setLinkText] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [additionalPrompt, setAdditionalPrompt] = useState('')
-  const [jobId, setJobId] = useState<string | null>(null)
+  const [jobId, setJobId] = useState<string | null>(() => searchParams.get('job'))
   const [workflowOpen, setWorkflowOpen] = useState(false)
   const [draftSaved, setDraftSaved] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
@@ -66,6 +67,7 @@ export function ImportProjectPage() {
         onProgress: setUploadProgress,
         onJobCreated: (created) => {
           setJobId(created.id)
+          setSearchParams({ job: created.id }, { replace: true })
           queryClient.setQueryData(['import-job', created.id], created)
           setWorkflowOpen(true)
         },
@@ -73,6 +75,7 @@ export function ImportProjectPage() {
     },
     onSuccess: (job) => {
       setJobId(job.id)
+      setSearchParams({ job: job.id }, { replace: true })
       queryClient.setQueryData(['import-job', job.id], job)
       setWorkflowOpen(true)
       toast.success('导入任务已启动')
@@ -103,6 +106,7 @@ export function ImportProjectPage() {
     mutationFn: (id: string) => cancelImportJob(id),
     onSuccess: () => {
       setJobId(null)
+      setSearchParams({}, { replace: true })
       upload.reset()
       setUploadProgress(0)
       setWorkflowOpen(false)
@@ -144,6 +148,7 @@ export function ImportProjectPage() {
     setFiles([])
     setAdditionalPrompt('')
     setJobId(null)
+    setSearchParams({}, { replace: true })
     setDraftSaved(false)
     setUploadProgress(0)
     upload.reset()
