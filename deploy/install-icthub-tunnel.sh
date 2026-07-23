@@ -5,12 +5,15 @@ repo_dir="${1:-/home/winbeau/xju-icthub}"
 token_staging="/home/winbeau/.icthub-tunnel.env.tmp"
 
 cd "$repo_dir"
-test -s "$token_staging"
 sudo -v
 
 sudo install -d -m 0755 /etc/cloudflared
-sudo install -m 0600 "$token_staging" /etc/cloudflared/icthub.env
-rm -f "$token_staging"
+if [[ -s "$token_staging" ]]; then
+    sudo install -m 0600 "$token_staging" /etc/cloudflared/icthub.env
+    rm -f "$token_staging"
+else
+    sudo test -s /etc/cloudflared/icthub.env
+fi
 
 sudo install -m 0644 \
     deploy/cloudflared-icthub.service \
@@ -34,5 +37,5 @@ systemctl is-active \
     icthub-import-worker.service \
     feiyue-backend.service
 
-curl --noproxy '*' -fsS http://127.0.0.1:8481/ >/dev/null
-printf 'ICTHub tunnel origin is ready at http://127.0.0.1:8481\n'
+curl --noproxy '*' -fsS http://127.0.0.1:8482/ >/dev/null
+printf 'ICTHub tunnel origin is ready at http://127.0.0.1:8482\n'
