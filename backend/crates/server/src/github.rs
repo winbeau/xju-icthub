@@ -317,7 +317,7 @@ impl GitHubPublisher for GhCliPublisher {
                     OsStr::new(&full_name),
                     OsStr::new("--private"),
                     OsStr::new("--source"),
-                    staging_dir.as_os_str(),
+                    OsStr::new("."),
                     OsStr::new("--remote"),
                     OsStr::new("origin"),
                     OsStr::new("--push"),
