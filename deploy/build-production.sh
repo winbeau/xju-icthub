@@ -47,7 +47,11 @@ if [[ -n "$unexpected_lock_diff" ]]; then
 fi
 printf 'Normalized Codex Cargo.lock SHA-256: '
 sha256sum Cargo.lock | cut -d' ' -f1
-cargo build --release --locked --bin codex --jobs "${ICTHUB_CODEX_BUILD_JOBS:-2}"
+# The production host has 8 GiB of RAM and no swap. Building Codex with two
+# release/LTO rustc processes can exceed that limit and be killed by the OOM
+# killer, so keep the safe default serial while still allowing larger builders
+# to opt in to more jobs explicitly.
+cargo build --release --locked --bin codex --jobs "${ICTHUB_CODEX_BUILD_JOBS:-1}"
 install -Dm0755 target/release/codex "$repo_dir/backend/tools/codex"
 restore_codex_lock
 trap - EXIT
