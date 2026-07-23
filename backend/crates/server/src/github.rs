@@ -266,7 +266,7 @@ impl GitHubPublisher for GhCliPublisher {
                         OsStr::new("view"),
                         OsStr::new(&full_name),
                         OsStr::new("--json"),
-                        OsStr::new("description,isPrivate,url,defaultBranchRef"),
+                        OsStr::new("description,isPrivate,url"),
                     ],
                     &staging_dir,
                     Some(&token),
@@ -282,13 +282,29 @@ impl GitHubPublisher for GhCliPublisher {
                     .as_str()
                     .map(str::to_owned)
                     .unwrap_or_else(|| format!("https://github.com/{full_name}"));
-                let remote_sha = metadata["defaultBranchRef"]["target"]["oid"]
-                    .as_str()
-                    .map(str::to_owned);
                 if same_job && is_private {
+                    let commits_endpoint = format!("repos/{full_name}/commits/HEAD");
+                    let remote_head = self
+                        .run_command(
+                            &self.config.gh_bin,
+                            &[
+                                OsStr::new("api"),
+                                OsStr::new(&commits_endpoint),
+                                OsStr::new("--jq"),
+                                OsStr::new(".sha"),
+                            ],
+                            &staging_dir,
+                            Some(&token),
+                            "gh api repository head",
+                        )
+                        .await?;
+                    let remote_sha = String::from_utf8(remote_head.stdout)
+                        .context("gh returned a non-UTF-8 commit id")?
+                        .trim()
+                        .to_owned();
                     return Ok(GitHubPublishOutcome {
                         repo_url,
-                        commit_sha: remote_sha.unwrap_or(commit_sha),
+                        commit_sha: remote_sha,
                     });
                 }
                 bail!("GitHub repository name already exists and belongs to another source");
