@@ -1,49 +1,10 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import {
-  Bot,
-  Check,
-  FileSearch,
-  FolderArchive,
-  ListChecks,
-  LoaderCircle,
-  Save,
-  ShieldCheck,
-  Sparkles,
-  Square,
-  X,
-} from 'lucide-react'
+import { Bot, LoaderCircle, Save, Sparkles, Square, X } from 'lucide-react'
 import type { ImportJob } from '@/api/schemas/importJob'
+import { ImportWorkflowProgress } from '@/components/imports/ImportWorkflowProgress'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
-
-const STEPS = [
-  {
-    title: '收集输入',
-    detail: '接收项目简介、多个链接和混合附件。',
-    icon: FolderArchive,
-  },
-  {
-    title: '安全整理',
-    detail: '隔离文件，检查路径与体积，展开 ZIP 并建立索引。',
-    icon: ShieldCheck,
-  },
-  {
-    title: '理解材料',
-    detail: '读取源码结构、文档、PPT 和媒体信息；不执行项目代码。',
-    icon: FileSearch,
-  },
-  {
-    title: '生成草稿',
-    detail: '整理项目名、简介、主分类和资源链接，保留依据不足的字段为空。',
-    icon: Sparkles,
-  },
-  {
-    title: '人工确认',
-    detail: '成员核对并补充内容，确认后才正式上传项目。',
-    icon: ListChecks,
-  },
-] as const
 
 export function ImportWorkflowDialog({
   additionalPrompt,
@@ -89,8 +50,6 @@ export function ImportWorkflowDialog({
   }, [onOpenChange, open])
 
   if (!open) return null
-  const currentStep = workflowStep(job, submitting)
-  const failed = job?.status === 'failed'
   const completed = job?.status === 'completed'
 
   return createPortal(
@@ -140,11 +99,16 @@ export function ImportWorkflowDialog({
           </div>
 
           <div className="mt-5">
+            <ImportWorkflowProgress job={job} submitting={submitting} />
+          </div>
+
+          <div className="mt-5">
             <label htmlFor="codex-refinement" className="text-sm font-medium">
               补充给 Codex 的提示
             </label>
             <p className="mt-1 text-sm leading-6 text-text-muted">
-              可补充希望识别的标签、负责人、来源、奖项或其他整理要求。流程完成后再注入 Codex，不会中断当前文件整理。
+              可补充希望识别的标签、负责人、来源、奖项或其他整理要求。流程完成后再注入
+              Codex，不会中断当前文件整理。
             </p>
             <Textarea
               id="codex-refinement"
@@ -154,35 +118,6 @@ export function ImportWorkflowDialog({
               className="mt-3 min-h-24 text-sm leading-6"
             />
           </div>
-
-          <ol className="mt-5 grid gap-3 sm:grid-cols-5">
-            {STEPS.map((step, index) => {
-              const Icon = step.icon
-              const completed = index < currentStep || (job?.status === 'completed' && index <= 3)
-              const active = index === currentStep && !failed
-              const failedStep = failed && index === currentStep
-              return (
-                <li
-                  key={step.title}
-                  className={`relative rounded-lg border p-3 ${active ? 'border-border-strong bg-bg-subtle' : 'border-border'}`}
-                >
-                  <span
-                    className={`flex size-8 shrink-0 items-center justify-center rounded-full border ${completed ? 'border-text bg-text text-bg' : failedStep ? 'border-red-300 bg-red-50 text-red-700' : active ? 'border-text bg-bg text-text' : 'border-border bg-bg text-text-faint'}`}
-                  >
-                    {completed ? <Check className="size-4" aria-hidden /> : <Icon className="size-4" aria-hidden />}
-                  </span>
-                  <div className="mt-3">
-                    <p className={`text-sm font-medium ${active ? 'text-text' : 'text-text-muted'}`}>
-                      {index + 1}. {step.title}
-                    </p>
-                    <p className="mt-1.5 text-xs leading-5 text-text-muted">{step.detail}</p>
-                    {active && <span className="mt-2 inline-block text-xs text-text-faint">进行中</span>}
-                    {failedStep && <span className="mt-2 inline-block text-xs text-red-700">已停止</span>}
-                  </div>
-                </li>
-              )
-            })}
-          </ol>
 
           <div className="mt-5 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs leading-5 text-text-faint">
@@ -196,7 +131,11 @@ export function ImportWorkflowDialog({
                   disabled={cancelling}
                   onClick={onCancel}
                 >
-                  {cancelling ? <LoaderCircle className="animate-spin" aria-hidden /> : <Square aria-hidden />}
+                  {cancelling ? (
+                    <LoaderCircle className="animate-spin" aria-hidden />
+                  ) : (
+                    <Square aria-hidden />
+                  )}
                   {cancelling ? '正在取消…' : '取消整理'}
                 </Button>
               )}
@@ -205,7 +144,13 @@ export function ImportWorkflowDialog({
                 disabled={!completed || !additionalPrompt.trim() || savingPrompt}
                 onClick={onSavePrompt}
               >
-                {savingPrompt ? <LoaderCircle className="animate-spin" aria-hidden /> : completed ? <Save aria-hidden /> : <Sparkles aria-hidden />}
+                {savingPrompt ? (
+                  <LoaderCircle className="animate-spin" aria-hidden />
+                ) : completed ? (
+                  <Save aria-hidden />
+                ) : (
+                  <Sparkles aria-hidden />
+                )}
                 {savingPrompt ? '正在保存…' : completed ? '保存并交给 Codex' : '等待整理完成'}
               </Button>
             </div>
@@ -224,15 +169,4 @@ function InputCount({ label, value }: { label: string; value: string }) {
       <p className="mt-1 text-sm font-medium">{value}</p>
     </div>
   )
-}
-
-function workflowStep(job: ImportJob | undefined, submitting: boolean): number {
-  if (submitting && !job) return 1
-  if (!job) return 0
-  if (job.status === 'failed') return job.progress >= 70 ? 3 : job.progress >= 15 ? 1 : 0
-  if (job.status === 'completed') return 4
-  if (job.status === 'agent_running' || job.status === 'agent_queued') return 3
-  if (job.status === 'analyzing') return 2
-  if (job.status === 'extracting') return 1
-  return job.progress >= 70 ? 3 : job.progress >= 15 ? 1 : 0
 }

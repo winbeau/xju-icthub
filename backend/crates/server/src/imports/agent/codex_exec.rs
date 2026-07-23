@@ -38,6 +38,19 @@ pub(crate) struct CodexExecRunner {
 impl CodexExecRunner {
     pub fn new(mut config: CodexExecConfig) -> anyhow::Result<Self> {
         config.timeout = bounded_timeout(config.timeout.as_secs());
+        let startup_dir =
+            std::env::current_dir().context("failed to resolve process working directory")?;
+        if config.binary.is_relative() && config.binary.components().count() > 1 {
+            config.binary = startup_dir.join(&config.binary);
+        }
+        if config.codex_home.is_relative() {
+            config.codex_home = startup_dir.join(&config.codex_home);
+        }
+        if let Some(api_key_file) = config.api_key_file.as_mut() {
+            if api_key_file.is_relative() {
+                *api_key_file = startup_dir.join(&*api_key_file);
+            }
+        }
         if config.enabled {
             if config.base_url.as_deref().is_none_or(str::is_empty)
                 || config.model.as_deref().is_none_or(str::is_empty)
@@ -347,6 +360,29 @@ mod tests {
             timeout: Duration::from_secs(600),
         });
         assert!(runner.is_ok());
+    }
+
+    #[test]
+    fn runner_resolves_relative_executable_before_changing_analysis_directory() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            directory.path().join("auth.json"),
+            r#"{"OPENAI_API_KEY":"not-used-by-this-test"}"#,
+        )
+        .expect("auth file");
+        let runner = CodexExecRunner::new(CodexExecConfig {
+            enabled: true,
+            binary: PathBuf::from("tools/codex"),
+            codex_home: directory.path().to_path_buf(),
+            base_url: Some("https://api.example.test/v1".to_owned()),
+            model: Some("configured-model".to_owned()),
+            api_key_file: None,
+            timeout: Duration::from_secs(600),
+        })
+        .expect("runner");
+
+        assert!(runner.config.binary.is_absolute());
+        assert!(runner.config.binary.ends_with(Path::new("tools/codex")));
     }
 
     #[tokio::test]
