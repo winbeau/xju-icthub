@@ -101,13 +101,6 @@ export type ProjectWriteInput = z.infer<typeof ProjectWriteInputSchema>
 export const GeneratedCoverSchema = ProjectCoverSchema
 export type GeneratedCover = z.infer<typeof GeneratedCoverSchema>
 
-export const ProjectImportResponseSchema = z.object({
-  created: z.number().int().nonnegative(),
-  updated: z.number().int().nonnegative(),
-  total: z.number().int().nonnegative(),
-})
-export type ProjectImportResponse = z.infer<typeof ProjectImportResponseSchema>
-
 export const ProjectListResponseSchema = z.object({
   items: z.array(ProjectSummarySchema),
   total: z.number().int().nonnegative(),

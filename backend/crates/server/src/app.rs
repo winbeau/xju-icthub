@@ -18,7 +18,6 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/projects",
             get(projects::list).post(projects::create),
         )
-        .route("/api/v1/projects/import", post(projects::import))
         .route(
             "/api/v1/import-jobs",
             post(imports::create).layer(DefaultBodyLimit::max(IMPORT_REQUEST_BODY_LIMIT_BYTES)),
@@ -275,6 +274,23 @@ mod tests {
             .await
             .expect("import response");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn legacy_table_import_endpoint_is_removed() {
+        let state = AppState::for_test().await.expect("test state");
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/projects/import")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"items":[]}"#))
+                    .unwrap(),
+            )
+            .await
+            .expect("legacy import response");
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
     #[tokio::test]

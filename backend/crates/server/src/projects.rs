@@ -119,20 +119,6 @@ pub struct ProjectWriteInput {
     pub cover_tone: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectImportRequest {
-    pub items: Vec<ProjectWriteInput>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectImportResponse {
-    pub created: usize,
-    pub updated: usize,
-    pub total: usize,
-}
-
 #[derive(Debug, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectResource {
@@ -348,65 +334,6 @@ pub async fn archive(
         return Err(AppError::NotFound);
     }
     Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn import(
-    State(state): State<AppState>,
-    AuthContext(identity): AuthContext,
-    Json(request): Json<ProjectImportRequest>,
-) -> Result<Json<ProjectImportResponse>, AppError> {
-    require_member(&identity)?;
-    if request.items.is_empty() {
-        return Err(AppError::BadRequest("导入内容不能为空".to_owned()));
-    }
-    if request.items.len() > 200 {
-        return Err(AppError::BadRequest("单次最多导入 200 个项目".to_owned()));
-    }
-
-    let mut slugs = HashSet::new();
-    let mut items = Vec::with_capacity(request.items.len());
-    for item in request.items {
-        let item = item.normalized()?;
-        if !slugs.insert(item.slug.clone()) {
-            return Err(AppError::BadRequest(format!(
-                "导入内容中项目路径 {} 重复",
-                item.slug
-            )));
-        }
-        validate_tags(&state, &item.tags).await?;
-        items.push(item);
-    }
-
-    let mut created = 0;
-    let mut updated = 0;
-    let mut tx = state.db.begin().await?;
-    for input in &items {
-        if let Some(id) = sqlx::query_scalar::<_, String>("SELECT id FROM projects WHERE slug = ?")
-            .bind(&input.slug)
-            .fetch_optional(&mut *tx)
-            .await?
-        {
-            update_project(&mut tx, &id, input).await?;
-            replace_children(&mut tx, &id, input, &identity.sid).await?;
-            updated += 1;
-        } else {
-            let id = Uuid::new_v4().to_string();
-            insert_project(&mut tx, &id, input, &identity.sid).await?;
-            replace_children(&mut tx, &id, input, &identity.sid).await?;
-            created += 1;
-        }
-    }
-    tx.commit().await?;
-    for input in &items {
-        if input.cover_mode.as_deref() != Some("manual") {
-            covers::generate_for_slug(&state, &input.slug, false).await?;
-        }
-    }
-    Ok(Json(ProjectImportResponse {
-        created,
-        updated,
-        total: items.len(),
-    }))
 }
 
 fn require_member(identity: &FeiyueIdentity) -> Result<(), AppError> {

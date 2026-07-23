@@ -168,26 +168,6 @@ registerMock('DELETE', '/api/v1/projects/:slug', ({ headers, path }) => {
   return null
 })
 
-registerMock('POST', '/api/v1/projects/import', ({ body, headers }) => {
-  requireMember(headers)
-  const payload = ProjectWriteInputSchema.array()
-    .max(200)
-    .parse((body as { items?: unknown } | null)?.items)
-  let created = 0
-  let updated = 0
-  for (const input of payload) {
-    const index = mockProjects.findIndex((project) => project.slug === input.slug)
-    if (index >= 0) {
-      mockProjects[index] = detailFromInput(input, mockProjects[index]!.id)
-      updated += 1
-    } else {
-      mockProjects.unshift(detailFromInput(input))
-      created += 1
-    }
-  }
-  return { created, updated, total: payload.length }
-})
-
 registerMock('GET', '/api/v1/tags', ({ headers }) => {
   requireMember(headers)
   return mockTags.filter((tag) => tag.isActive)

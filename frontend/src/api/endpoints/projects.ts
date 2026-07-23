@@ -3,12 +3,10 @@ import { authHeaders } from '@/api/endpoints/auth'
 import {
   ProjectDetailSchema,
   GeneratedCoverSchema,
-  ProjectImportResponseSchema,
   ProjectListResponseSchema,
   type ProjectCategory,
   type ProjectDetail,
   type GeneratedCover,
-  type ProjectImportResponse,
   type ProjectListResponse,
   type ProjectWriteInput,
 } from '@/api/schemas/project'
@@ -66,16 +64,6 @@ export function archiveProject(slug: string): Promise<null> {
     method: 'DELETE',
     path: `/api/v1/projects/${encodeURIComponent(slug)}`,
     schema: z.null(),
-    headers: authHeaders(),
-  })
-}
-
-export function importProjects(items: ProjectWriteInput[]): Promise<ProjectImportResponse> {
-  return request({
-    method: 'POST',
-    path: '/api/v1/projects/import',
-    body: { items },
-    schema: ProjectImportResponseSchema,
     headers: authHeaders(),
   })
 }
