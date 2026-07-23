@@ -93,3 +93,14 @@
     transition: none;
   }
 }
+
+/* Word preview styling migrated from xju-feiyue's material reader. */
+.ict-docx-preview .docx-wrapper {
+  background: var(--color-bg-subtle) !important;
+  padding: 0 !important;
+}
+
+.ict-docx-preview .docx-wrapper > section.docx {
+  box-shadow: var(--shadow-card) !important;
+  margin-bottom: 1rem !important;
+}

@@ -1,20 +1,39 @@
-import { request } from '@/api/client'
+import { request, requestBlob } from '@/api/client'
 import { authHeaders } from '@/api/endpoints/auth'
 import {
   ProjectDetailSchema,
   GeneratedCoverSchema,
   ProjectListResponseSchema,
+  ResourcePreviewTicketSchema,
   type ProjectCategory,
   type ProjectDetail,
   type GeneratedCover,
   type ProjectListResponse,
   type ProjectWriteInput,
+  type ResourcePreviewTicket,
 } from '@/api/schemas/project'
 import { z } from 'zod'
 
 export type ProjectListQuery = {
   q?: string | undefined
   category?: ProjectCategory | undefined
+}
+
+export function loadProjectResource(path: string, signal?: AbortSignal): Promise<Blob> {
+  return requestBlob(path, authHeaders(), signal)
+}
+
+export function createProjectResourcePreview(
+  slug: string,
+  resourceId: string,
+): Promise<ResourcePreviewTicket> {
+  return request({
+    method: 'POST',
+    path: `/api/v1/projects/${encodeURIComponent(slug)}/resources/${encodeURIComponent(resourceId)}/preview`,
+    body: {},
+    schema: ResourcePreviewTicketSchema,
+    headers: authHeaders(),
+  })
 }
 
 export function listProjects(query: ProjectListQuery): Promise<ProjectListResponse> {

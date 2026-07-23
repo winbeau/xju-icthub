@@ -2,6 +2,13 @@ import { z } from 'zod'
 import { request, requestBinary, requestFormData } from '@/api/client'
 import { authHeaders } from '@/api/endpoints/auth'
 import { ImportJobSchema, type ImportJob } from '@/api/schemas/importJob'
+import {
+  ProjectDetailSchema,
+  ResourcePreviewTicketSchema,
+  type ProjectDetail,
+  type ProjectWriteInput,
+  type ResourcePreviewTicket,
+} from '@/api/schemas/project'
 
 export type ImportLinkInput = {
   url: string
@@ -181,6 +188,32 @@ export function publishImportGitHub(id: string): Promise<ImportJob> {
     method: 'POST',
     path: `/api/v1/import-jobs/${encodeURIComponent(id)}/github/publish`,
     schema: ImportJobSchema,
+    headers: authHeaders(),
+  })
+}
+
+export function commitImportProject(
+  id: string,
+  input: ProjectWriteInput,
+): Promise<ProjectDetail> {
+  return request({
+    method: 'POST',
+    path: `/api/v1/import-jobs/${encodeURIComponent(id)}/commit`,
+    body: input,
+    schema: ProjectDetailSchema,
+    headers: authHeaders(),
+  })
+}
+
+export function createImportArtifactPreview(
+  jobId: string,
+  artifactId: string,
+): Promise<ResourcePreviewTicket> {
+  return request({
+    method: 'POST',
+    path: `/api/v1/import-jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifactId)}/preview`,
+    body: {},
+    schema: ResourcePreviewTicketSchema,
     headers: authHeaders(),
   })
 }

@@ -33,6 +33,14 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/v1/import-jobs/{id}", get(imports::detail))
         .route(
+            "/api/v1/import-jobs/{id}/artifacts/{artifact_id}/content",
+            get(resources::import_content),
+        )
+        .route(
+            "/api/v1/import-jobs/{id}/artifacts/{artifact_id}/preview",
+            post(resources::create_import_preview),
+        )
+        .route(
             "/api/v1/import-jobs/{id}/commit",
             post(projects::commit_import),
         )
@@ -79,6 +87,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/resource-previews/{token}/{*path}",
             get(resources::preview_asset),
+        )
+        .route(
+            "/api/v1/import-previews/{token}/{*path}",
+            get(resources::import_preview_asset),
         )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -330,6 +342,54 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
+                    .uri(format!(
+                        "/api/v1/import-jobs/{job_id}/artifacts/html-deck/content"
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("temporary artifact content");
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/import-jobs/{job_id}/artifacts/html-deck/preview"
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("temporary preview ticket");
+        assert_eq!(response.status(), StatusCode::OK);
+        let temporary_ticket: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), 16 * 1024)
+                .await
+                .expect("temporary ticket body"),
+        )
+        .expect("temporary preview ticket");
+        let temporary_url = temporary_ticket["url"].as_str().expect("temporary URL");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(temporary_url)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("temporary preview HTML");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
                     .method("POST")
                     .uri(format!("/api/v1/import-jobs/{job_id}/commit"))
                     .header(header::AUTHORIZATION, "Bearer member")
@@ -426,7 +486,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("{preview_url}/app.js"))
+                    .uri(preview_url.replace("index.html", "app.js"))
                     .body(Body::empty())
                     .unwrap(),
             )

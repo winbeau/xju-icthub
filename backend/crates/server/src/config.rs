@@ -7,6 +7,7 @@ pub struct Config {
     pub feiyue_auth_url: String,
     pub import_root: PathBuf,
     pub project_root: PathBuf,
+    pub preview_public_base_url: Option<String>,
     pub import_max_upload_bytes: u64,
     pub import_max_unpacked_bytes: u64,
     pub import_worker_embedded: bool,
@@ -53,6 +54,8 @@ impl Config {
         let project_root = env::var_os("ICTHUB_PROJECT_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("uploads").join("projects"));
+        let preview_public_base_url = non_empty_env("ICTHUB_PREVIEW_PUBLIC_BASE_URL")?
+            .map(|value| value.trim_end_matches('/').to_owned());
         let import_max_upload_bytes = env_u64("ICTHUB_IMPORT_MAX_UPLOAD_MB", 500)? * 1024 * 1024;
         let import_max_unpacked_bytes =
             env_u64("ICTHUB_IMPORT_MAX_UNPACKED_MB", 768)? * 1024 * 1024;
@@ -129,6 +132,7 @@ impl Config {
             feiyue_auth_url,
             import_root,
             project_root,
+            preview_public_base_url,
             import_max_upload_bytes,
             import_max_unpacked_bytes,
             import_worker_embedded,

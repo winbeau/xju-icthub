@@ -5,6 +5,10 @@ const useMock = import.meta.env.DEV && import.meta.env['VITE_USE_MOCK'] !== 'fal
 const baseURL = apiBase ?? ''
 const mockLatencyMs = 120
 
+export function resolveApiUrl(path: string): string {
+  return new URL(`${baseURL}${path}`, window.location.origin).toString()
+}
+
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
 export type MockRequest = {
@@ -230,4 +234,23 @@ export async function requestBinary<T>(options: BinaryRequestOptions<T>): Promis
     raw = await response.json()
   }
   return options.schema.parse(raw)
+}
+
+export async function requestBlob(
+  path: string,
+  headers: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  if (useMock) {
+    throw new ApiError('本地模拟数据不包含可预览附件', 501, path)
+  }
+  const response = await fetch(resolveApiUrl(path), {
+    method: 'GET',
+    headers,
+    ...(signal ? { signal } : {}),
+  })
+  if (!response.ok) {
+    throw new ApiError(`附件读取失败（HTTP ${response.status}）`, response.status, path)
+  }
+  return response.blob()
 }

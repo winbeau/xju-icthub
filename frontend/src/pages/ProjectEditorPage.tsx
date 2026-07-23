@@ -9,6 +9,7 @@ import {
   getProject,
   updateProject,
 } from '@/api/endpoints/projects'
+import { commitImportProject } from '@/api/endpoints/imports'
 import { createTag, listTags, suggestTag } from '@/api/endpoints/tags'
 import {
   ProjectWriteInputSchema,
@@ -72,12 +73,17 @@ export function ProjectEditorPage() {
   const [newTagName, setNewTagName] = useState('')
   const [newTagGroup, setNewTagGroup] = useState('技术')
   const [formError, setFormError] = useState('')
+  const [importJobId, setImportJobId] = useState<string | null>(null)
 
   useEffect(() => {
     if (editing) return
-    const state = location.state as { importDraft?: Partial<ProjectWriteInput> } | null
+    const state = location.state as {
+      importDraft?: Partial<ProjectWriteInput>
+      importJobId?: string
+    } | null
     if (!state?.importDraft) return
     setForm((current) => ({ ...current, ...state.importDraft }))
+    setImportJobId(state.importJobId ?? null)
     window.history.replaceState({}, document.title)
   }, [editing, location.state])
 
@@ -101,7 +107,12 @@ export function ProjectEditorPage() {
       ownerName: project.data.ownerName,
       sourceName: project.data.sourceName,
       tags: project.data.tags,
-      resources: project.data.resources.map(({ id: _id, ...resource }) => resource),
+      resources: project.data.resources.map((resource) => ({
+        id: resource.id,
+        type: resource.type,
+        title: resource.title,
+        url: resource.url,
+      })),
       coverMode: project.data.coverMode,
       coverTitle: project.data.coverTitle,
       coverSubtitle: project.data.coverSubtitle,
@@ -136,12 +147,16 @@ export function ProjectEditorPage() {
 
   const save = useMutation({
     mutationFn: (input: ProjectWriteInput) =>
-      editing ? updateProject(slug!, input) : createProject(input),
+      editing
+        ? updateProject(slug!, input)
+        : importJobId
+          ? commitImportProject(importJobId, input)
+          : createProject(input),
     onSuccess: async (saved) => {
       await queryClient.invalidateQueries({ queryKey: ['projects'] })
       queryClient.setQueryData(['project', saved.slug], saved)
       toast.success(editing ? '项目已更新' : '项目已上传')
-      navigate('/admin/projects')
+      navigate(importJobId ? `/projects/${saved.slug}` : '/admin/projects')
     },
     onError: (error) => setFormError(error instanceof Error ? error.message : '保存失败'),
   })
@@ -279,7 +294,7 @@ export function ProjectEditorPage() {
               <div key={index} className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-[150px_1fr_1.3fr_auto]">
                 <select value={resource.type} onChange={(event) => setResource(index, { ...resource, type: event.target.value as ProjectResourceInput['type'] })} className="h-11 rounded-md border border-input bg-bg px-3 text-base" aria-label="资源类型">{RESOURCE_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select>
                 <Input value={resource.title} onChange={(event) => setResource(index, { ...resource, title: event.target.value })} placeholder="资源标题" aria-label="资源标题" className="h-11" />
-                <Input value={resource.url ?? ''} onChange={(event) => { const url = event.target.value || null; setResource(index, { ...resource, url, type: isImageUrl(url) ? 'image' : resource.type }) }} placeholder="https://…（可稍后补）" aria-label="资源链接" className="h-11" />
+                <Input value={resource.url ?? ''} disabled={Boolean(resource.sourceArtifactId)} onChange={(event) => { const url = event.target.value || null; setResource(index, { ...resource, url, type: isImageUrl(url) ? 'image' : resource.type }) }} placeholder={resource.sourceArtifactId ? '将从导入任务永久保存' : 'https://…（可稍后补）'} aria-label="资源链接" className="h-11" />
                 <Button type="button" variant="ghost" size="icon" aria-label="移除资源" onClick={() => setField('resources', form.resources.filter((_, itemIndex) => itemIndex !== index))}><Trash2 aria-hidden /></Button>
               </div>
             ))}

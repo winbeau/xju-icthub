@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Archive,
@@ -9,6 +9,7 @@ import {
   FileText,
   Film,
   Github,
+  Eye,
   Image as ImageIcon,
   Link2,
   LoaderCircle,
@@ -17,11 +18,13 @@ import {
   ShieldCheck,
   RotateCcw,
   Workflow,
+  X,
 } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   cancelImportJob,
+  createImportArtifactPreview,
   createImportJob,
   getImportJob,
   publishImportGitHub,
@@ -29,12 +32,17 @@ import {
   type ImportLinkInput,
 } from '@/api/endpoints/imports'
 import type { ImportArtifact, ImportJob } from '@/api/schemas/importJob'
-import type { ProjectResourceInput, ProjectWriteInput } from '@/api/schemas/project'
+import type {
+  ProjectResource,
+  ProjectResourceInput,
+  ProjectWriteInput,
+} from '@/api/schemas/project'
 import { AttachmentDropzone } from '@/components/imports/AttachmentDropzone'
 import { agentStatusLabel } from '@/components/imports/importWorkflowState'
 import { ImportWorkflowDialog } from '@/components/imports/ImportWorkflowDialog'
 import { ImportWorkflowProgress } from '@/components/imports/ImportWorkflowProgress'
 import { CreateModeSwitch } from '@/components/projects/CreateModeSwitch'
+import { ResourcePreviewPane } from '@/components/resources/ResourcePreviewPane'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 
@@ -52,6 +60,8 @@ export function ImportProjectPage() {
   const [workflowOpen, setWorkflowOpen] = useState(false)
   const [draftSaved, setDraftSaved] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [selectedArtifactIds, setSelectedArtifactIds] = useState<string[]>([])
+  const initializedSelectionJob = useRef<string | null>(null)
   const uploadAbortRef = useRef<AbortController | null>(null)
   const links = useMemo(() => parseLinks(linkText), [linkText])
   const readyToSubmit = Boolean(prompt.trim() || links.length || files.length)
@@ -102,6 +112,14 @@ export function ImportProjectPage() {
   const job = jobQuery.data ?? upload.data
   const busy = upload.isPending || Boolean(job && !TERMINAL_STATUSES.has(job.status))
 
+  useEffect(() => {
+    if (!job?.result || initializedSelectionJob.current === job.id) return
+    initializedSelectionJob.current = job.id
+    setSelectedArtifactIds(
+      job.artifacts.filter(isProjectResourceArtifact).map((artifact) => artifact.id),
+    )
+  }, [job])
+
   const cancel = useMutation({
     mutationFn: (id: string) => cancelImportJob(id),
     onSuccess: () => {
@@ -151,11 +169,18 @@ export function ImportProjectPage() {
     setSearchParams({}, { replace: true })
     setDraftSaved(false)
     setUploadProgress(0)
+    setSelectedArtifactIds([])
+    initializedSelectionJob.current = null
     upload.reset()
   }
   const openDraft = () => {
     if (!job?.result) return
-    navigate('/admin/projects/new', { state: { importDraft: editorDraft(job) } })
+    navigate('/admin/projects/new', {
+      state: {
+        importDraft: editorDraft(job, new Set(selectedArtifactIds)),
+        importJobId: job.id,
+      },
+    })
   }
 
   return (
@@ -299,6 +324,15 @@ export function ImportProjectPage() {
           onOpenDraft={openDraft}
           onPublishGitHub={() => publishGitHub.mutate(job.id)}
           publishingGitHub={publishGitHub.isPending}
+          selectedArtifactIds={selectedArtifactIds}
+          onToggleArtifact={(artifactId) =>
+            setSelectedArtifactIds((current) =>
+              current.includes(artifactId)
+                ? current.filter((id) => id !== artifactId)
+                : [...current, artifactId],
+            )
+          }
+          onSelectionChange={setSelectedArtifactIds}
         />
       )}
       <ImportWorkflowDialog
@@ -336,12 +370,18 @@ function JobResult({
   onOpenDraft,
   onPublishGitHub,
   publishingGitHub,
+  selectedArtifactIds,
+  onToggleArtifact,
+  onSelectionChange,
 }: {
   job: ImportJob
   loading: boolean
   onOpenDraft: () => void
   onPublishGitHub: () => void
   publishingGitHub: boolean
+  selectedArtifactIds: string[]
+  onToggleArtifact: (artifactId: string) => void
+  onSelectionChange: (artifactIds: string[]) => void
 }) {
   const result = job.result
   const groupedArtifacts = useMemo(() => groupArtifacts(job.artifacts), [job.artifacts])
@@ -349,6 +389,7 @@ function JobResult({
   const publication = job.githubPublication
   const hasSourceCode = result?.normalizedResources.sourceCode.length
   const publishReady = result?.capabilities.githubPublish === 'ready'
+  const [previewArtifact, setPreviewArtifact] = useState<ImportArtifact | null>(null)
   return (
     <div className="pt-8">
       <section className="rounded-xl border border-border p-5 sm:p-6">
@@ -403,8 +444,30 @@ function JobResult({
               <SectionHeading
                 index="03"
                 title="材料清单"
-                description={`当前展示 ${job.artifacts.length} 个已索引文件。`}
+                description={`已索引 ${job.artifacts.length} 个文件，选中 ${selectedArtifactIds.length} 个写入项目资料。`}
               />
+              <div className="mt-3 flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    onSelectionChange(
+                      job.artifacts.filter(isProjectResourceArtifact).map((artifact) => artifact.id),
+                    )
+                  }
+                >
+                  全选资料
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onSelectionChange([])}
+                >
+                  清空选择
+                </Button>
+              </div>
               <div className="mt-4 divide-y divide-border border-y border-border">
                 {Object.entries(groupedArtifacts).map(([kind, artifacts]) => (
                   <details
@@ -420,6 +483,15 @@ function JobResult({
                     <ul className="ml-7 mt-3 space-y-2">
                       {artifacts.slice(0, 30).map((artifact) => (
                         <li key={artifact.id} className="flex items-center gap-3 text-sm">
+                          {isProjectResourceArtifact(artifact) && (
+                            <input
+                              type="checkbox"
+                              checked={selectedArtifactIds.includes(artifact.id)}
+                              onChange={() => onToggleArtifact(artifact.id)}
+                              aria-label={`将 ${artifact.displayPath} 写入项目资料`}
+                              className="size-4 shrink-0 accent-text"
+                            />
+                          )}
                           <span
                             className="min-w-0 flex-1 truncate text-text-muted"
                             title={artifact.relativePath}
@@ -435,6 +507,18 @@ function JobResult({
                             <span className="rounded bg-bg-subtle px-2 py-0.5 text-xs text-text-faint">
                               封面候选
                             </span>
+                          )}
+                          {isPreviewableArtifact(artifact) && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 shrink-0 gap-1 px-2 text-xs"
+                              onClick={() => setPreviewArtifact(artifact)}
+                            >
+                              <Eye className="size-3.5" aria-hidden />
+                              预览
+                            </Button>
                           )}
                           <span className="shrink-0 font-mono text-xs text-text-faint">
                             {formatBytes(artifact.sizeBytes)}
@@ -555,6 +639,44 @@ function JobResult({
           </aside>
         </div>
       )}
+      {previewArtifact && (
+        <ImportArtifactPreviewModal
+          jobId={job.id}
+          artifact={previewArtifact}
+          onClose={() => setPreviewArtifact(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function ImportArtifactPreviewModal({
+  jobId,
+  artifact,
+  onClose,
+}: {
+  jobId: string
+  artifact: ImportArtifact
+  onClose: () => void
+}) {
+  const resource = importArtifactPreviewResource(jobId, artifact)
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4" role="dialog" aria-modal="true" aria-label={`预览 ${resource.title}`}>
+      <div className="flex h-[86vh] w-full max-w-6xl min-h-0 flex-col overflow-hidden rounded-xl bg-bg shadow-2xl">
+        <div className="flex h-12 shrink-0 items-center gap-3 border-b border-border px-4">
+          <p className="min-w-0 flex-1 truncate font-medium">导入材料预览</p>
+          <Button variant="ghost" size="icon" className="size-8" onClick={onClose} aria-label="关闭预览">
+            <X className="size-4" />
+          </Button>
+        </div>
+        <div className="min-h-0 flex-1">
+          <ResourcePreviewPane
+            slug=""
+            resource={resource}
+            createHtmlPreview={() => createImportArtifactPreview(jobId, artifact.id)}
+          />
+        </div>
+      </div>
     </div>
   )
 }
@@ -623,7 +745,10 @@ function ArtifactIcon({ kind }: { kind: ImportArtifact['artifactKind'] }) {
   return <FileQuestion className={className} aria-hidden />
 }
 
-function editorDraft(job: ImportJob): Partial<ProjectWriteInput> {
+function editorDraft(
+  job: ImportJob,
+  selectedArtifactIds: ReadonlySet<string>,
+): Partial<ProjectWriteInput> {
   const draft = job.result!.projectDraft
   const githubResource: ProjectResourceInput[] =
     job.githubPublication?.status === 'completed' && job.githubPublication.repoUrl
@@ -648,13 +773,8 @@ function editorDraft(job: ImportJob): Partial<ProjectWriteInput> {
     resources: [
       ...githubResource,
       ...job.artifacts
-        .filter((artifact) =>
-          ['document', 'presentation', 'video', 'image', 'archive'].includes(
-            artifact.artifactKind,
-          ),
-        )
-        .slice(0, 12)
-        .map(artifactResource),
+        .filter((artifact) => selectedArtifactIds.has(artifact.id))
+        .map((artifact) => artifactResource(job.id, artifact)),
     ],
   }
 }
@@ -667,7 +787,7 @@ function githubPublicationStatus(status: string | undefined, ready: boolean): st
   return ready ? '可创建' : '待凭据'
 }
 
-function artifactResource(artifact: ImportArtifact): ProjectResourceInput {
+function artifactResource(jobId: string, artifact: ImportArtifact): ProjectResourceInput {
   const type = (
     {
       document: 'document',
@@ -685,11 +805,73 @@ function artifactResource(artifact: ImportArtifact): ProjectResourceInput {
     type,
     title,
     url: null,
+    sourceImportJobId: jobId,
+    sourceArtifactId: artifact.id,
   }
+}
+
+function isProjectResourceArtifact(artifact: ImportArtifact): boolean {
+  if (artifact.relativePath.startsWith('analysis/previews/')) return false
+  return ['document', 'presentation', 'video', 'image', 'archive'].includes(
+    artifact.artifactKind,
+  )
 }
 
 function isHtmlPresentationArtifact(artifact: ImportArtifact): boolean {
   return artifact.artifactKind === 'presentation' && /\.html?$/i.test(artifact.displayPath)
+}
+
+function isPreviewableArtifact(artifact: ImportArtifact): boolean {
+  return importArtifactPreviewKind(artifact) !== 'download'
+}
+
+function importArtifactPreviewResource(
+  jobId: string,
+  artifact: ImportArtifact,
+): ProjectResource {
+  const type = (
+    {
+      code: 'document',
+      document: 'document',
+      presentation: 'presentation',
+      video: 'video',
+      image: 'image',
+      archive: 'archive',
+      data: 'document',
+      other: 'archive',
+    } as const
+  )[artifact.artifactKind]
+  const contentUrl = `/api/v1/import-jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifact.id)}/content`
+  return {
+    id: artifact.id,
+    type,
+    title: artifact.displayPath.split('/').at(-1) ?? artifact.displayPath,
+    url: null,
+    sourceName: artifact.displayPath.split('/').at(-1) ?? artifact.displayPath,
+    mimeType: artifact.mimeType,
+    sizeBytes: artifact.sizeBytes,
+    displayPath: artifact.displayPath,
+    previewKind: importArtifactPreviewKind(artifact),
+    contentUrl,
+    downloadUrl: contentUrl,
+  }
+}
+
+function importArtifactPreviewKind(
+  artifact: ImportArtifact,
+): NonNullable<ProjectResource['previewKind']> {
+  if (isHtmlPresentationArtifact(artifact)) return 'html_bundle'
+  const extension = artifact.displayPath.split('.').at(-1)?.toLowerCase() ?? ''
+  if (extension === 'pdf') return 'pdf'
+  if (extension === 'docx') return 'docx'
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(extension)) return 'image'
+  if (['mp4', 'webm', 'mov', 'm4v'].includes(extension)) return 'video'
+  if (
+    ['txt', 'md', 'rs', 'ts', 'tsx', 'js', 'jsx', 'json', 'toml', 'yaml', 'yml', 'py', 'java', 'c', 'cpp', 'h', 'hpp', 'css', 'html'].includes(extension)
+  ) {
+    return 'code'
+  }
+  return 'download'
 }
 
 function formatBytes(bytes: number): string {

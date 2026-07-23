@@ -206,7 +206,7 @@ async fn materialize_import_artifact(
         return Err(AppError::BadRequest("导入附件路径不安全".to_owned()));
     }
     let job_root = state.import_root.join(job_id);
-    let source_root = if relative_path.starts_with("analysis") {
+    let source_root = if artifact.relative_path.starts_with("analysis/previews/") {
         job_root.clone()
     } else {
         job_root.join("extracted")
@@ -305,6 +305,22 @@ pub async fn content(
     serve_resource_file(&state, &resource, false).await
 }
 
+pub async fn import_content(
+    State(state): State<AppState>,
+    AuthContext(identity): AuthContext,
+    Path((job_id, artifact_id)): Path<(String, String)>,
+) -> Result<Response<Body>, AppError> {
+    require_member(&identity)?;
+    let artifact = load_import_artifact(&state, &job_id, &artifact_id, &identity).await?;
+    let path = import_artifact_path(&state, &job_id, &artifact.relative_path)?;
+    let mime_type = artifact
+        .mime_type
+        .as_deref()
+        .or_else(|| mime_guess::from_path(&path).first_raw())
+        .unwrap_or("application/octet-stream");
+    stream_file(&path, mime_type, false).await
+}
+
 pub async fn download(
     State(state): State<AppState>,
     AuthContext(identity): AuthContext,
@@ -348,8 +364,64 @@ pub async fn create_preview(
     .bind(&expires_at)
     .execute(&state.db)
     .await?;
+    let entry_path = resource.entry_path.as_deref().unwrap_or("index.html");
     Ok(Json(PreviewTicket {
-        url: format!("/api/v1/resource-previews/{raw_token}"),
+        url: public_preview_url(
+            &state,
+            &format!("/api/v1/resource-previews/{raw_token}/{entry_path}"),
+        ),
+        expires_at,
+    }))
+}
+
+pub async fn create_import_preview(
+    State(state): State<AppState>,
+    AuthContext(identity): AuthContext,
+    Path((job_id, artifact_id)): Path<(String, String)>,
+) -> Result<Json<PreviewTicket>, AppError> {
+    require_member(&identity)?;
+    let artifact = load_import_artifact(&state, &job_id, &artifact_id, &identity).await?;
+    let path = import_artifact_path(&state, &job_id, &artifact.relative_path)?;
+    let is_html = artifact.artifact_kind == "presentation"
+        && path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("html"));
+    if !is_html {
+        return Err(AppError::BadRequest(
+            "该导入附件不需要 HTML 演示令牌".to_owned(),
+        ));
+    }
+    sqlx::query("DELETE FROM import_artifact_preview_tokens WHERE expires_at <= CURRENT_TIMESTAMP")
+        .execute(&state.db)
+        .await?;
+    let raw_token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let expires_at =
+        sqlx::query_scalar::<_, String>("SELECT datetime('now', '+' || ? || ' minutes')")
+            .bind(PREVIEW_TOKEN_MINUTES)
+            .fetch_one(&state.db)
+            .await?;
+    sqlx::query(
+        "INSERT INTO import_artifact_preview_tokens
+            (token_hash, job_id, artifact_id, created_by_sid, expires_at)
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(hash_token(&raw_token))
+    .bind(&job_id)
+    .bind(&artifact_id)
+    .bind(&identity.sid)
+    .bind(&expires_at)
+    .execute(&state.db)
+    .await?;
+    let entry = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("index.html");
+    Ok(Json(PreviewTicket {
+        url: public_preview_url(
+            &state,
+            &format!("/api/v1/import-previews/{raw_token}/{entry}"),
+        ),
         expires_at,
     }))
 }
@@ -366,6 +438,36 @@ pub async fn preview_asset(
     Path((token, path)): Path<(String, String)>,
 ) -> Result<Response<Body>, AppError> {
     serve_preview_asset(&state, &token, Some(path)).await
+}
+
+pub async fn import_preview_asset(
+    State(state): State<AppState>,
+    Path((token, path)): Path<(String, String)>,
+) -> Result<Response<Body>, AppError> {
+    let artifact = sqlx::query_as::<_, (String, String)>(
+        "SELECT t.job_id, a.relative_path
+         FROM import_artifact_preview_tokens t
+         JOIN import_artifacts a ON a.id = t.artifact_id AND a.job_id = t.job_id
+         WHERE t.token_hash = ? AND t.expires_at > CURRENT_TIMESTAMP",
+    )
+    .bind(hash_token(&token))
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let entry_path = import_artifact_path(&state, &artifact.0, &artifact.1)?;
+    let bundle_root = entry_path.parent().ok_or(AppError::NotFound)?;
+    let relative_path = FsPath::new(&path);
+    if !is_safe_relative_path(relative_path) {
+        return Err(AppError::NotFound);
+    }
+    let file_path = bundle_root.join(relative_path);
+    ensure_file_within(&file_path, bundle_root).map_err(|_| AppError::NotFound)?;
+    let mime_type = mime_guess::from_path(&file_path)
+        .first_raw()
+        .unwrap_or("application/octet-stream");
+    let mut response = stream_file(&file_path, mime_type, false).await?;
+    apply_html_preview_headers(&mut response);
+    Ok(response)
 }
 
 async fn serve_preview_asset(
@@ -405,13 +507,70 @@ async fn serve_preview_asset(
         .first_raw()
         .unwrap_or("application/octet-stream");
     let mut response = stream_file(&file_path, mime_type, false).await?;
+    apply_html_preview_headers(&mut response);
+    Ok(response)
+}
+
+async fn load_import_artifact(
+    state: &AppState,
+    job_id: &str,
+    artifact_id: &str,
+    identity: &FeiyueIdentity,
+) -> Result<ImportArtifactRow, AppError> {
+    let artifact = sqlx::query_as::<_, ImportArtifactRow>(
+        "SELECT a.relative_path, a.artifact_kind, a.mime_type, a.size_bytes,
+                j.created_by_sid, j.status job_status
+         FROM import_artifacts a
+         JOIN import_jobs j ON j.id = a.job_id
+         WHERE a.id = ? AND a.job_id = ?",
+    )
+    .bind(artifact_id)
+    .bind(job_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if artifact.created_by_sid != identity.sid && !identity.is_superadmin() {
+        return Err(AppError::Forbidden);
+    }
+    Ok(artifact)
+}
+
+fn import_artifact_path(
+    state: &AppState,
+    job_id: &str,
+    relative_path: &str,
+) -> Result<std::path::PathBuf, AppError> {
+    let relative = FsPath::new(relative_path);
+    if !is_safe_relative_path(relative) {
+        return Err(AppError::NotFound);
+    }
+    let job_root = state.import_root.join(job_id);
+    let source_root = if relative_path.starts_with("analysis/previews/") {
+        job_root
+    } else {
+        job_root.join("extracted")
+    };
+    let path = source_root.join(relative);
+    ensure_file_within(&path, &source_root).map_err(|_| AppError::NotFound)?;
+    Ok(path)
+}
+
+fn public_preview_url(state: &AppState, path: &str) -> String {
+    state
+        .preview_public_base_url
+        .as_ref()
+        .as_deref()
+        .map(|base| format!("{base}{path}"))
+        .unwrap_or_else(|| path.to_owned())
+}
+
+fn apply_html_preview_headers(response: &mut Response<Body>) {
     response.headers_mut().insert(
         CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(
-            "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'",
+            "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors https://icthub.top http://127.0.0.1:* http://localhost:*",
         ),
     );
-    Ok(response)
 }
 
 async fn load_resource_file(

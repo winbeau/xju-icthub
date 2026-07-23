@@ -55,11 +55,34 @@ export const ProjectResourceSchema = z.object({
   ]),
   title: z.string(),
   url: z.string().url().nullable(),
+  sourceName: z.string().nullable().optional(),
+  mimeType: z.string().nullable().optional(),
+  sizeBytes: z.number().int().nullable().optional(),
+  displayPath: z.string().nullable().optional(),
+  previewKind: z
+    .enum(['pdf', 'docx', 'image', 'video', 'code', 'html_bundle', 'download'])
+    .nullable()
+    .optional(),
+  contentUrl: z.string().nullable().optional(),
+  downloadUrl: z.string().nullable().optional(),
 })
 
 export type ProjectResource = z.infer<typeof ProjectResourceSchema>
-export const ProjectResourceInputSchema = ProjectResourceSchema.omit({ id: true })
+export const ProjectResourceInputSchema = z.object({
+  id: z.string().optional(),
+  type: ProjectResourceSchema.shape.type,
+  title: z.string(),
+  url: z.string().url().nullable(),
+  sourceImportJobId: z.string().optional(),
+  sourceArtifactId: z.string().optional(),
+})
 export type ProjectResourceInput = z.infer<typeof ProjectResourceInputSchema>
+
+export const ResourcePreviewTicketSchema = z.object({
+  url: z.string(),
+  expiresAt: z.string(),
+})
+export type ResourcePreviewTicket = z.infer<typeof ResourcePreviewTicketSchema>
 
 export const ProjectDetailSchema = ProjectSummarySchema.extend({
   classificationStatus: z.enum(['classified', 'pending']),

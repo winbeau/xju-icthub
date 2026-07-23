@@ -92,7 +92,10 @@ function detailFromInput(
     coverKeywords: input.coverKeywords.length ? input.coverKeywords : generated.coverKeywords,
     coverTone: input.coverTone,
     coverConfidence: input.coverMode === 'manual' ? 1 : generated.coverConfidence,
-    resources: input.resources.map((resource) => ({ id: crypto.randomUUID(), ...resource })),
+    resources: input.resources.map((resource) => ({
+      ...resource,
+      id: resource.id ?? crypto.randomUUID(),
+    })),
   }
 }
 
@@ -384,6 +387,18 @@ registerMock('GET', '/api/v1/import-jobs/:id', ({ path, headers }) => {
   const job = mockImportJobs[id]
   if (!job) throw new ApiError('导入任务不存在', 404, path)
   return job
+})
+
+registerMock('POST', '/api/v1/import-jobs/:id/commit', ({ path, headers, body }) => {
+  requireMember(headers)
+  const id = decodeURIComponent(path.split('/').at(-2) ?? '')
+  if (!mockImportJobs[id]) throw new ApiError('导入任务不存在', 404, path)
+  const input = ProjectWriteInputSchema.parse(body)
+  const existing = mockProjects.findIndex((project) => project.slug === input.slug)
+  const project = detailFromInput(input, existing >= 0 ? mockProjects[existing]!.id : undefined)
+  if (existing >= 0) mockProjects[existing] = project
+  else mockProjects = [project, ...mockProjects]
+  return project
 })
 
 registerMock('POST', '/api/v1/import-jobs/:id/cancel', ({ path, headers }) => {
