@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs::File,
     io::{self, Read, SeekFrom, Write},
     path::{Component, Path, PathBuf},
@@ -13,6 +13,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
+use encoding_rs::GBK;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Sqlite, Transaction};
@@ -33,6 +34,7 @@ const MAX_SINGLE_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_TEXT_CORPUS_BYTES: usize = 512 * 1024;
 const MAX_VISIBLE_ARTIFACTS: i64 = 500;
 const IMPORT_CHUNK_SIZE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_NESTED_ARCHIVE_DEPTH: usize = 3;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1704,14 +1706,37 @@ async fn process_job(
     .await?;
     persist_analysis(state, claim.id, primary_input_id.as_deref(), &build).await?;
     let result_json = serde_json::to_string(&build.analysis)?;
+    let (next_status, next_stage, next_progress, event_type, event_message) =
+        if state.import_agent.enabled() {
+            (
+                "agent_queued",
+                "等待 Codex 分析",
+                82,
+                "agent_queued",
+                "本地材料整理完成，Codex 任务已经排队",
+            )
+        } else {
+            (
+                "completed",
+                "等待确认",
+                100,
+                "completed",
+                "材料整理完成，项目草稿已生成",
+            )
+        };
     let completed = sqlx::query(
-        "UPDATE import_jobs SET status = 'completed', stage = '等待确认', progress = 100,
+        "UPDATE import_jobs SET status = ?, stage = ?, progress = ?,
             result_json = ?, error_message = NULL, updated_at = CURRENT_TIMESTAMP,
-            worker_id = NULL, lease_expires_at = NULL, completed_at = CURRENT_TIMESTAMP,
+            worker_id = NULL, lease_expires_at = NULL,
+            completed_at = CASE WHEN ? = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END,
             analysis_bundle_path = 'analysis/analysis-bundle.json'
          WHERE id = ? AND worker_id = ? AND status != 'cancelled'",
     )
+    .bind(next_status)
+    .bind(next_stage)
+    .bind(next_progress)
     .bind(result_json)
+    .bind(next_status)
     .bind(claim.id)
     .bind(claim.worker_id)
     .execute(&state.db)
@@ -1731,11 +1756,11 @@ async fn process_job(
     insert_event(
         state,
         claim.id,
-        "completed",
-        "completed",
-        "等待确认",
-        100,
-        Some("材料整理完成，项目草稿已生成"),
+        event_type,
+        next_status,
+        next_stage,
+        next_progress,
+        Some(event_message),
     )
     .await?;
     Ok(())
@@ -1990,13 +2015,7 @@ fn prepare_normalized_archive(
             let prefix = format!("{:02}-{}", index + 1, stem);
             for entry_index in 0..archive.len() {
                 let mut entry = archive.by_index(entry_index)?;
-                let enclosed = entry
-                    .enclosed_name()
-                    .context("archive contains an unsafe path")?
-                    .to_owned();
-                if !is_safe_relative_path(&enclosed) {
-                    bail!("archive contains an unsafe path");
-                }
+                let enclosed = decoded_zip_entry_path(entry.name_raw())?;
                 if entry
                     .unix_mode()
                     .is_some_and(|mode| mode & 0o170000 == 0o120000)
@@ -2068,6 +2087,9 @@ fn safe_extract_and_analyze(
 ) -> anyhow::Result<AnalysisBuild> {
     let archive_path = job_dir.join("source").join("input.zip");
     let extracted_root = job_dir.join("extracted");
+    if extracted_root.exists() {
+        std::fs::remove_dir_all(&extracted_root)?;
+    }
     std::fs::create_dir_all(&extracted_root)?;
     let source = File::open(&archive_path).context("cannot open uploaded ZIP")?;
     let mut archive = ZipArchive::new(source).context("uploaded file is not a valid ZIP")?;
@@ -2083,16 +2105,12 @@ fn safe_extract_and_analyze(
         .take(MAX_TEXT_CORPUS_BYTES)
         .collect::<String>();
     let mut top_levels = BTreeSet::new();
+    let mut entry_count = archive.len();
+    let mut nested_archives = VecDeque::<(PathBuf, usize)>::new();
 
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
-        let enclosed = entry
-            .enclosed_name()
-            .context("archive contains an unsafe path")?
-            .to_owned();
-        if !is_safe_relative_path(&enclosed) {
-            bail!("archive contains an unsafe path");
-        }
+        let enclosed = decoded_zip_entry_path(entry.name_raw())?;
         if entry
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
@@ -2111,78 +2129,77 @@ fn safe_extract_and_analyze(
         }
 
         let output_path = extracted_root.join(&enclosed);
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        if output_path.exists() {
-            bail!("archive contains duplicate file paths");
-        }
-        let mut output = File::create(&output_path)?;
-        let allowed = MAX_SINGLE_FILE_BYTES.min(max_unpacked_bytes.saturating_sub(total_written));
-        if allowed == 0 {
-            bail!("archive exceeds the unpacked size limit");
-        }
-        let copied = io::copy(&mut (&mut entry).take(allowed + 1), &mut output)?;
-        if copied > allowed || copied > MAX_SINGLE_FILE_BYTES {
-            bail!("archive contains an oversized file");
-        }
-        total_written += copied;
-        if total_written > max_unpacked_bytes {
-            bail!("archive exceeds the unpacked size limit");
-        }
-
-        let relative_path = path_for_json(&enclosed);
-        let kind = artifact_kind(&enclosed).to_owned();
-        let mime_type = mime_guess::from_path(&enclosed)
-            .first_raw()
-            .map(str::to_owned);
-        let is_cover_candidate = kind == "image" && cover_candidate_rank(&enclosed) > 0;
-        let extraction =
-            extract_artifact(&output_path, &enclosed, &kind, copied, &tools.ffprobe_bin);
-        if let Some(text) = extraction.text.as_deref() {
-            append_extracted_preview(&relative_path, text, &mut text_corpus);
-        }
-        let text_excerpt = extraction.text;
-        artifacts.push(ArtifactRecord {
-            relative_path: relative_path.clone(),
-            artifact_kind: kind.clone(),
-            mime_type,
-            size_bytes: copied,
-            extractor: extraction.extractor,
-            metadata_json: serde_json::to_string(&extraction.metadata)?,
-            text_excerpt,
-            is_cover_candidate,
-        });
-        let preview_root = job_dir.join("analysis").join("previews");
-        match generate_visual_preview(
+        let copied = extract_zip_entry(
+            &mut entry,
             &output_path,
-            &enclosed,
-            &kind,
-            &preview_root,
-            &tools.ffmpeg_bin,
-            &tools.pdftoppm_bin,
-        ) {
-            Ok(Some(preview)) => {
-                let preview_relative = preview
-                    .output_path
-                    .strip_prefix(job_dir)
-                    .map(path_for_json)
-                    .unwrap_or_else(|_| path_for_json(&preview.output_path));
-                let preview_size = std::fs::metadata(&preview.output_path)?.len();
-                artifacts.push(ArtifactRecord {
-                    relative_path: preview_relative,
-                    artifact_kind: "image".to_owned(),
-                    mime_type: Some("image/jpeg".to_owned()),
-                    size_bytes: preview_size,
-                    extractor: preview.extractor.to_owned(),
-                    metadata_json: serde_json::to_string(&preview.metadata)?,
-                    text_excerpt: None,
-                    is_cover_candidate: true,
-                });
-            }
-            Ok(None) => {}
+            &mut total_written,
+            max_unpacked_bytes,
+        )?;
+        index_extracted_artifact(
+            job_dir,
+            &extracted_root,
+            &output_path,
+            copied,
+            tools,
+            &mut artifacts,
+            &mut text_corpus,
+        )?;
+        if is_zip_path(&output_path) {
+            nested_archives.push_back((output_path, 1));
+        }
+    }
+
+    while let Some((nested_path, depth)) = nested_archives.pop_front() {
+        if depth > MAX_NESTED_ARCHIVE_DEPTH {
+            continue;
+        }
+        let source = File::open(&nested_path)?;
+        let mut nested = match ZipArchive::new(source) {
+            Ok(archive) => archive,
             Err(error) => {
-                tracing::warn!(file = %relative_path, error = %error, "visual preview generation skipped");
+                tracing::warn!(file = %nested_path.display(), error = %error, "nested ZIP could not be opened");
+                continue;
+            }
+        };
+        if entry_count.saturating_add(nested.len()) > MAX_ARCHIVE_ENTRIES {
+            bail!("archive contains too many entries");
+        }
+        entry_count += nested.len();
+        let nested_root = nested_archive_root(&nested_path);
+        for index in 0..nested.len() {
+            let mut entry = nested.by_index(index)?;
+            let enclosed = decoded_zip_entry_path(entry.name_raw())?;
+            if entry
+                .unix_mode()
+                .is_some_and(|mode| mode & 0o170000 == 0o120000)
+            {
+                bail!("archive contains a symbolic link");
+            }
+            if entry.is_dir() {
+                continue;
+            }
+            if let Some(directory) = ignored_generated_directory(&enclosed) {
+                skipped_directories.insert(directory.to_owned());
+                continue;
+            }
+            let output_path = nested_root.join(&enclosed);
+            let copied = extract_zip_entry(
+                &mut entry,
+                &output_path,
+                &mut total_written,
+                max_unpacked_bytes,
+            )?;
+            index_extracted_artifact(
+                job_dir,
+                &extracted_root,
+                &output_path,
+                copied,
+                tools,
+                &mut artifacts,
+                &mut text_corpus,
+            )?;
+            if depth < MAX_NESTED_ARCHIVE_DEPTH && is_zip_path(&output_path) {
+                nested_archives.push_back((output_path, depth + 1));
             }
         }
     }
@@ -2204,6 +2221,121 @@ fn safe_extract_and_analyze(
         artifacts,
         analysis,
     })
+}
+
+fn decoded_zip_entry_path(raw_name: &[u8]) -> anyhow::Result<PathBuf> {
+    let decoded = match std::str::from_utf8(raw_name) {
+        Ok(value) => value.to_owned(),
+        Err(_) => {
+            let (value, _, had_errors) = GBK.decode(raw_name);
+            if had_errors {
+                bail!("archive contains a filename with an unsupported encoding");
+            }
+            value.into_owned()
+        }
+    };
+    let path = PathBuf::from(decoded.replace('\\', "/"));
+    if !is_safe_relative_path(&path) {
+        bail!("archive contains an unsafe path");
+    }
+    Ok(path)
+}
+
+fn nested_archive_root(archive_path: &Path) -> PathBuf {
+    let stem = archive_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(safe_upload_name)
+        .unwrap_or_else(|| "nested-archive".to_owned());
+    archive_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!("{stem}.__contents"))
+}
+
+fn extract_zip_entry(
+    entry: &mut impl Read,
+    output_path: &Path,
+    total_written: &mut u64,
+    max_unpacked_bytes: u64,
+) -> anyhow::Result<u64> {
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if output_path.exists() {
+        bail!("archive contains duplicate file paths");
+    }
+    let before = *total_written;
+    let mut output = File::create(output_path)?;
+    copy_limited(entry, &mut output, total_written, max_unpacked_bytes)?;
+    Ok(total_written.saturating_sub(before))
+}
+
+fn index_extracted_artifact(
+    job_dir: &Path,
+    extracted_root: &Path,
+    output_path: &Path,
+    copied: u64,
+    tools: &ExtractorTools,
+    artifacts: &mut Vec<ArtifactRecord>,
+    text_corpus: &mut String,
+) -> anyhow::Result<()> {
+    let relative = output_path
+        .strip_prefix(extracted_root)
+        .context("extracted artifact escaped its root")?;
+    let relative_path = path_for_json(relative);
+    let kind = artifact_kind(relative).to_owned();
+    let mime_type = mime_guess::from_path(relative)
+        .first_raw()
+        .map(str::to_owned);
+    let is_cover_candidate = kind == "image" && cover_candidate_rank(relative) > 0;
+    let extraction = extract_artifact(output_path, relative, &kind, copied, &tools.ffprobe_bin);
+    if let Some(text) = extraction.text.as_deref() {
+        append_extracted_preview(&relative_path, text, text_corpus);
+    }
+    artifacts.push(ArtifactRecord {
+        relative_path: relative_path.clone(),
+        artifact_kind: kind.clone(),
+        mime_type,
+        size_bytes: copied,
+        extractor: extraction.extractor,
+        metadata_json: serde_json::to_string(&extraction.metadata)?,
+        text_excerpt: extraction.text,
+        is_cover_candidate,
+    });
+    let preview_root = job_dir.join("analysis").join("previews");
+    match generate_visual_preview(
+        output_path,
+        relative,
+        &kind,
+        &preview_root,
+        &tools.ffmpeg_bin,
+        &tools.pdftoppm_bin,
+    ) {
+        Ok(Some(preview)) => {
+            let preview_relative = preview
+                .output_path
+                .strip_prefix(job_dir)
+                .map(path_for_json)
+                .unwrap_or_else(|_| path_for_json(&preview.output_path));
+            let preview_size = std::fs::metadata(&preview.output_path)?.len();
+            artifacts.push(ArtifactRecord {
+                relative_path: preview_relative,
+                artifact_kind: "image".to_owned(),
+                mime_type: Some("image/jpeg".to_owned()),
+                size_bytes: preview_size,
+                extractor: preview.extractor.to_owned(),
+                metadata_json: serde_json::to_string(&preview.metadata)?,
+                text_excerpt: None,
+                is_cover_candidate: true,
+            });
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(file = %relative_path, error = %error, "visual preview generation skipped");
+        }
+    }
+    Ok(())
 }
 
 fn append_extracted_preview(label: &str, text: &str, corpus: &mut String) {
@@ -2853,14 +2985,19 @@ fn user_facing_agent_error(error: &anyhow::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write, path::Path};
+    use std::{
+        fs::File,
+        io::{Cursor, Write},
+        path::Path,
+    };
 
+    use encoding_rs::GBK;
     use tempfile::tempdir;
     use zip::{write::SimpleFileOptions, ZipWriter};
 
     use super::{
-        analyze_context_only, artifact_kind, prepare_normalized_archive, safe_extract_and_analyze,
-        ExtractorTools, UploadedInput,
+        analyze_context_only, artifact_kind, decoded_zip_entry_path, prepare_normalized_archive,
+        safe_extract_and_analyze, ExtractorTools, UploadedInput,
     };
 
     #[test]
@@ -2870,6 +3007,56 @@ mod tests {
         assert_eq!(artifact_kind(Path::new("答辩.pptx")), "presentation");
         assert_eq!(artifact_kind(Path::new("demo.mp4")), "video");
         assert_eq!(artifact_kind(Path::new("poster.png")), "image");
+    }
+
+    #[test]
+    fn decodes_legacy_gbk_zip_names() {
+        let (encoded, _, had_errors) = GBK.encode("项目技术介绍/源码.zip");
+        assert!(!had_errors);
+        assert_eq!(
+            decoded_zip_entry_path(encoded.as_ref()).expect("decoded GBK path"),
+            Path::new("项目技术介绍/源码.zip")
+        );
+    }
+
+    #[test]
+    fn extracts_nested_zip_contents() {
+        let root = tempdir().expect("temp root");
+        let job_dir = root.path().join("job");
+        std::fs::create_dir_all(job_dir.join("source")).expect("source dir");
+
+        let mut nested = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        nested
+            .start_file("src/main.py", options)
+            .expect("nested file");
+        nested
+            .write_all(b"print('nested source')")
+            .expect("nested contents");
+        let nested = nested.finish().expect("finish nested zip").into_inner();
+
+        let file = File::create(job_dir.join("source/input.zip")).expect("outer zip");
+        let mut writer = ZipWriter::new(file);
+        writer
+            .start_file("materials/source.zip", options)
+            .expect("nested archive entry");
+        writer.write_all(&nested).expect("nested archive bytes");
+        writer.finish().expect("finish outer zip");
+
+        let build = safe_extract_and_analyze(
+            &job_dir,
+            "nested-project.zip",
+            "12345678-0000-0000-0000-000000000000",
+            16 * 1024 * 1024,
+            "",
+            "",
+            &test_extractor_tools(),
+        )
+        .expect("analyze nested zip");
+        assert!(build.artifacts.iter().any(|artifact| {
+            artifact.relative_path == "materials/source.__contents/src/main.py"
+                && artifact.artifact_kind == "code"
+        }));
     }
 
     #[test]

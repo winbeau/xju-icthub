@@ -817,6 +817,7 @@ dependencies = [
  "async-trait",
  "axum",
  "dotenvy",
+ "encoding_rs",
  "mime_guess",
  "pdf-extract",
  "quick-xml",

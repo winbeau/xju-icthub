@@ -481,6 +481,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_agent_runs_automatically_after_local_import() {
+        let identity_url = spawn_identity_service().await;
+        let state = AppState::for_test_with_identity_url(&identity_url)
+            .await
+            .expect("test state")
+            .with_import_agent(Arc::new(FakeAgentRunner));
+        let app = build_router(state.clone());
+        let zip = test_project_zip();
+        let boundary = "icthub-auto-agent-boundary";
+        let mut multipart = Vec::new();
+        write!(
+            multipart,
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"auto-agent.zip\"\r\nContent-Type: application/zip\r\n\r\n"
+        )
+        .expect("multipart header");
+        multipart.extend_from_slice(&zip);
+        write!(
+            multipart,
+            "\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"prompt\"\r\n\r\n负责人：张三\r\n--{boundary}--\r\n"
+        )
+        .expect("multipart footer");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/import-jobs")
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .header(
+                        header::CONTENT_TYPE,
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(multipart))
+                    .unwrap(),
+            )
+            .await
+            .expect("create automatic agent job");
+        let created: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), 128 * 1024)
+                .await
+                .expect("created body"),
+        )
+        .expect("created JSON");
+        let job_id = created["id"].as_str().expect("job id");
+        let worker = ImportWorkerOptions::new(50, 30);
+
+        assert!(process_one_queued_job(&state, &worker)
+            .await
+            .expect("local import worker"));
+        let queued = sqlx::query_scalar::<_, String>("SELECT status FROM import_jobs WHERE id = ?")
+            .bind(job_id)
+            .fetch_one(&state.db)
+            .await
+            .expect("queued agent status");
+        assert_eq!(queued, "agent_queued");
+
+        assert!(process_one_queued_job(&state, &worker)
+            .await
+            .expect("automatic agent worker"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/import-jobs/{job_id}"))
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("automatic agent detail");
+        let detail: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), 256 * 1024)
+                .await
+                .expect("detail body"),
+        )
+        .expect("detail JSON");
+        assert_eq!(detail["status"], "completed");
+        assert_eq!(detail["analysisEngine"], "codex_exec");
+        assert_eq!(detail["agentRuns"][0]["status"], "completed");
+    }
+
+    #[tokio::test]
     async fn import_worker_recovers_an_expired_lease() {
         let state = AppState::for_test().await.expect("test state");
         let job_id = "expired-import-job";
