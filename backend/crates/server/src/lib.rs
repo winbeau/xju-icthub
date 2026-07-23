@@ -6,6 +6,7 @@ mod error;
 mod github;
 mod imports;
 mod projects;
+mod resources;
 mod state;
 mod tags;
 

@@ -5,7 +5,7 @@ use axum::{
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
-use crate::{auth, covers, github, imports, projects, state::AppState, tags};
+use crate::{auth, covers, github, imports, projects, resources, state::AppState, tags};
 
 const IMPORT_REQUEST_BODY_LIMIT_BYTES: usize = 512 * 1024 * 1024;
 const IMPORT_CHUNK_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024 + 64 * 1024;
@@ -32,6 +32,10 @@ pub fn build_router(state: AppState) -> Router {
             post(imports::complete_chunked),
         )
         .route("/api/v1/import-jobs/{id}", get(imports::detail))
+        .route(
+            "/api/v1/import-jobs/{id}/commit",
+            post(projects::commit_import),
+        )
         .route("/api/v1/import-jobs/{id}/cancel", post(imports::cancel))
         .route("/api/v1/import-jobs/{id}/refine", post(imports::refine))
         .route(
@@ -55,6 +59,26 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/projects/{slug}/cover",
             axum::routing::patch(covers::patch),
+        )
+        .route(
+            "/api/v1/projects/{slug}/resources/{resource_id}/content",
+            get(resources::content),
+        )
+        .route(
+            "/api/v1/projects/{slug}/resources/{resource_id}/download",
+            get(resources::download),
+        )
+        .route(
+            "/api/v1/projects/{slug}/resources/{resource_id}/preview",
+            post(resources::create_preview),
+        )
+        .route(
+            "/api/v1/resource-previews/{token}",
+            get(resources::preview_index),
+        )
+        .route(
+            "/api/v1/resource-previews/{token}/{*path}",
+            get(resources::preview_asset),
         )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -258,6 +282,157 @@ mod tests {
             .await
             .expect("non-member detail response");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn import_commit_persists_files_and_serves_authenticated_previews() {
+        let identity_url = spawn_identity_service().await;
+        let state = AppState::for_test_with_identity_url(&identity_url)
+            .await
+            .expect("test state");
+        let job_id = "commit-resource-job";
+        let extracted = state
+            .import_root
+            .join(job_id)
+            .join("extracted/slides/ppt-html");
+        std::fs::create_dir_all(&extracted).expect("HTML presentation directory");
+        std::fs::write(
+            extracted.join("index.html"),
+            "<!doctype html><script src=\"app.js\"></script><h1>项目答辩</h1>",
+        )
+        .expect("HTML presentation");
+        std::fs::write(extracted.join("app.js"), "document.body.dataset.ready='1'")
+            .expect("HTML presentation asset");
+        sqlx::query(
+            "INSERT INTO import_jobs (
+                id, status, stage, progress, source_kind, source_name, created_by_sid,
+                completed_at
+             ) VALUES (?, 'completed', '等待确认', 100, 'zip', 'demo.zip',
+                '20211010001', CURRENT_TIMESTAMP)",
+        )
+        .bind(job_id)
+        .execute(&state.db)
+        .await
+        .expect("import job");
+        sqlx::query(
+            "INSERT INTO import_artifacts (
+                id, job_id, relative_path, artifact_kind, mime_type, size_bytes, extractor
+             ) VALUES ('html-deck', ?, 'slides/ppt-html/index.html', 'presentation',
+                'text/html', 64, 'file_index')",
+        )
+        .bind(job_id)
+        .execute(&state.db)
+        .await
+        .expect("import artifact");
+        let app = build_router(state.clone());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/import-jobs/{job_id}/commit"))
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "slug": "imported-presentation",
+                            "name": "导入演示项目",
+                            "summary": "验证导入附件永久化和 HTML 演示预览。",
+                            "primaryCategory": "数字媒体",
+                            "highestAward": null,
+                            "status": "待确认",
+                            "critique": "",
+                            "ownerName": null,
+                            "sourceName": null,
+                            "tags": [],
+                            "resources": [{
+                                "type": "presentation",
+                                "title": "项目答辩演示",
+                                "url": null,
+                                "sourceImportJobId": job_id,
+                                "sourceArtifactId": "html-deck"
+                            }]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("commit response");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let detail: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), 128 * 1024)
+                .await
+                .expect("commit body"),
+        )
+        .expect("project detail");
+        let resource_id = detail["resources"][0]["id"].as_str().expect("resource id");
+        assert_eq!(detail["resources"][0]["previewKind"], "html_bundle");
+        assert!(detail["resources"][0]["contentUrl"].is_string());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/projects/imported-presentation/resources/{resource_id}/content"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("anonymous content response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/projects/imported-presentation/resources/{resource_id}/preview"
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("preview ticket response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let ticket: Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), 16 * 1024)
+                .await
+                .expect("ticket body"),
+        )
+        .expect("preview ticket");
+        let preview_url = ticket["url"].as_str().expect("preview URL");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(preview_url)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("preview index response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("preview HTML");
+        assert!(String::from_utf8_lossy(&html).contains("项目答辩"));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{preview_url}/app.js"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("preview asset response");
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

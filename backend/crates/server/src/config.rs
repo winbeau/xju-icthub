@@ -6,6 +6,7 @@ pub struct Config {
     pub database_url: String,
     pub feiyue_auth_url: String,
     pub import_root: PathBuf,
+    pub project_root: PathBuf,
     pub import_max_upload_bytes: u64,
     pub import_max_unpacked_bytes: u64,
     pub import_worker_embedded: bool,
@@ -49,6 +50,9 @@ impl Config {
         let import_root = env::var_os("ICTHUB_IMPORT_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("uploads").join("imports"));
+        let project_root = env::var_os("ICTHUB_PROJECT_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("uploads").join("projects"));
         let import_max_upload_bytes = env_u64("ICTHUB_IMPORT_MAX_UPLOAD_MB", 500)? * 1024 * 1024;
         let import_max_unpacked_bytes =
             env_u64("ICTHUB_IMPORT_MAX_UNPACKED_MB", 768)? * 1024 * 1024;
@@ -124,6 +128,7 @@ impl Config {
             database_url,
             feiyue_auth_url,
             import_root,
+            project_root,
             import_max_upload_bytes,
             import_max_unpacked_bytes,
             import_worker_embedded,

@@ -17,6 +17,7 @@ pub struct AppState {
     pub db: SqlitePool,
     pub identity: FeiyueIdentityClient,
     pub import_root: Arc<PathBuf>,
+    pub project_root: Arc<PathBuf>,
     pub import_max_upload_bytes: u64,
     pub import_max_unpacked_bytes: u64,
     pub ffprobe_bin: Arc<String>,
@@ -47,6 +48,7 @@ impl AppState {
             .await?;
         sqlx::migrate!("../../migrations").run(&db).await?;
         std::fs::create_dir_all(&config.import_root)?;
+        std::fs::create_dir_all(&config.project_root)?;
         std::fs::create_dir_all(&config.codex_home)?;
         std::fs::create_dir_all(&config.codex_runtime_root)?;
         std::fs::create_dir_all(&config.github_runtime_root)?;
@@ -76,6 +78,7 @@ impl AppState {
             db,
             identity: FeiyueIdentityClient::new(config.feiyue_auth_url.clone()),
             import_root: Arc::new(config.import_root.clone()),
+            project_root: Arc::new(config.project_root.clone()),
             import_max_upload_bytes: config.import_max_upload_bytes,
             import_max_unpacked_bytes: config.import_max_unpacked_bytes,
             ffprobe_bin: Arc::new(config.ffprobe_bin.clone()),
@@ -98,11 +101,15 @@ impl AppState {
         sqlx::migrate!("../../migrations").run(&db).await?;
         let import_root =
             std::env::temp_dir().join(format!("icthub-import-test-{}", uuid::Uuid::new_v4()));
+        let project_root =
+            std::env::temp_dir().join(format!("icthub-project-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&import_root)?;
+        std::fs::create_dir_all(&project_root)?;
         Ok(Self {
             db,
             identity: FeiyueIdentityClient::new(identity_url.to_owned()),
             import_root: Arc::new(import_root),
+            project_root: Arc::new(project_root),
             import_max_upload_bytes: 16 * 1024 * 1024,
             import_max_unpacked_bytes: 64 * 1024 * 1024,
             ffprobe_bin: Arc::new("ffprobe-not-installed-for-tests".to_owned()),
