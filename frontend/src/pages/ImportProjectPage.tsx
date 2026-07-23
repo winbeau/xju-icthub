@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Archive,
@@ -48,20 +48,40 @@ export function ImportProjectPage() {
   const [jobId, setJobId] = useState<string | null>(null)
   const [workflowOpen, setWorkflowOpen] = useState(false)
   const [draftSaved, setDraftSaved] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const uploadAbortRef = useRef<AbortController | null>(null)
   const links = useMemo(() => parseLinks(linkText), [linkText])
   const readyToSubmit = Boolean(prompt.trim() || links.length || files.length)
 
   const upload = useMutation({
     mutationFn: () => {
       if (!readyToSubmit) throw new Error('请至少填写简介、链接或上传一个附件')
-      return createImportJob(files, links, prompt)
+      const controller = new AbortController()
+      uploadAbortRef.current = controller
+      setUploadProgress(0)
+      return createImportJob(files, links, prompt, {
+        signal: controller.signal,
+        onProgress: setUploadProgress,
+        onJobCreated: (created) => {
+          setJobId(created.id)
+          queryClient.setQueryData(['import-job', created.id], created)
+          setWorkflowOpen(true)
+        },
+      })
     },
     onSuccess: (job) => {
       setJobId(job.id)
+      queryClient.setQueryData(['import-job', job.id], job)
       setWorkflowOpen(true)
       toast.success('导入任务已启动')
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : '上传失败'),
+    onError: (error) => {
+      if (error instanceof DOMException && error.name === 'AbortError') return
+      toast.error(error instanceof Error ? error.message : '上传失败')
+    },
+    onSettled: () => {
+      uploadAbortRef.current = null
+    },
   })
   const jobQuery = useQuery({
     queryKey: ['import-job', jobId],
@@ -80,6 +100,7 @@ export function ImportProjectPage() {
     onSuccess: () => {
       setJobId(null)
       upload.reset()
+      setUploadProgress(0)
       setWorkflowOpen(false)
       setDraftSaved(true)
       toast.success('整理已取消，当前填写已保留')
@@ -100,12 +121,14 @@ export function ImportProjectPage() {
   })
 
   const reset = () => {
+    uploadAbortRef.current?.abort()
     setPrompt('')
     setLinkText('')
     setFiles([])
     setAdditionalPrompt('')
     setJobId(null)
     setDraftSaved(false)
+    setUploadProgress(0)
     upload.reset()
   }
   const openDraft = () => {
@@ -256,7 +279,12 @@ export function ImportProjectPage() {
         linkCount={links.length}
         onAdditionalPromptChange={setAdditionalPrompt}
         onCancel={
-          job && !TERMINAL_STATUSES.has(job.status) ? () => cancel.mutate(job.id) : undefined
+          job && !TERMINAL_STATUSES.has(job.status)
+            ? () => {
+                uploadAbortRef.current?.abort()
+                cancel.mutate(job.id)
+              }
+            : undefined
         }
         onOpenChange={setWorkflowOpen}
         onSavePrompt={
@@ -266,6 +294,7 @@ export function ImportProjectPage() {
         promptProvided={Boolean(prompt.trim())}
         savingPrompt={refine.isPending}
         submitting={upload.isPending}
+        uploadProgress={uploadProgress}
       />
     </div>
   )

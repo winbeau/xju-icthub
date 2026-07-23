@@ -28,13 +28,16 @@ export function ImportWorkflowProgress({
   job,
   showEvents = true,
   submitting = false,
+  uploadProgress = 0,
 }: {
   job: ImportJob | undefined
   showEvents?: boolean
   submitting?: boolean
+  uploadProgress?: number
 }) {
-  const progress = job?.progress ?? (submitting ? 8 : 0)
-  const summary = workflowSummary(job, submitting)
+  const mappedUploadProgress = Math.min(8, 1 + Math.round((uploadProgress / 100) * 7))
+  const progress = submitting ? mappedUploadProgress : (job?.progress ?? 0)
+  const summary = workflowSummary(job, submitting, uploadProgress)
   const steps = workflowSteps(job, submitting)
   const recentEvents = job?.events.slice(-4).reverse() ?? []
   const activeRun = job?.agentRuns.at(-1)
@@ -181,6 +184,7 @@ export function ImportWorkflowProgress({
 function workflowSummary(
   job: ImportJob | undefined,
   submitting: boolean,
+  uploadProgress: number,
 ): { title: string; detail: string; tone: 'idle' | 'active' | 'success' | 'warning' | 'error' } {
   if (!job) {
     return submitting
@@ -191,6 +195,12 @@ function workflowSummary(
         }
       : { title: '等待开始', detail: '提交后会在这里显示每一步的实时状态。', tone: 'idle' }
   }
+  if (job.status === 'uploading')
+    return {
+      title: '正在分片接收材料',
+      detail: `附件已上传 ${uploadProgress}%，网络波动时会自动重试当前小块。`,
+      tone: 'active',
+    }
   const latest = job.events.at(-1)
   if (job.status === 'failed')
     return {

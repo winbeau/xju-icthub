@@ -20,6 +20,7 @@ export function ImportWorkflowDialog({
   promptProvided,
   savingPrompt,
   submitting,
+  uploadProgress,
 }: {
   additionalPrompt: string
   cancelling: boolean
@@ -34,6 +35,7 @@ export function ImportWorkflowDialog({
   promptProvided: boolean
   savingPrompt: boolean
   submitting: boolean
+  uploadProgress: number
 }) {
   useEffect(() => {
     if (!open) return
@@ -99,7 +101,11 @@ export function ImportWorkflowDialog({
           </div>
 
           <div className="mt-5">
-            <ImportWorkflowProgress job={job} submitting={submitting} />
+            <ImportWorkflowProgress
+              job={job}
+              submitting={submitting}
+              uploadProgress={uploadProgress}
+            />
           </div>
 
           <div className="mt-5">

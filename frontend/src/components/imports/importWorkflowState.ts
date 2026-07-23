@@ -10,6 +10,7 @@ export function workflowSteps(
     return submitting
       ? ['active', 'pending', 'pending', 'pending', 'pending']
       : ['pending', 'pending', 'pending', 'pending', 'pending']
+  if (job.status === 'uploading') return ['active', 'pending', 'pending', 'pending', 'pending']
   const types = new Set(job.events.map((event) => event.eventType))
   const agentStarted =
     types.has('agent_queued') || job.status === 'agent_queued' || job.status === 'agent_running'

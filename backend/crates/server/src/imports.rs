@@ -1,21 +1,22 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Read, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     time::Duration,
 };
 
 use anyhow::{bail, Context};
 use axum::{
+    body::Bytes,
     extract::{Multipart, Path as AxumPath, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Sqlite, Transaction};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use uuid::Uuid;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive, ZipWriter};
 
@@ -31,6 +32,7 @@ const MAX_ARCHIVE_ENTRIES: usize = 5_000;
 const MAX_SINGLE_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_TEXT_CORPUS_BYTES: usize = 512 * 1024;
 const MAX_VISIBLE_ARTIFACTS: i64 = 500;
+const IMPORT_CHUNK_SIZE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +46,40 @@ struct LinkInput {
 #[serde(rename_all = "camelCase")]
 pub struct RefinementInput {
     prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChunkedImportFileInput {
+    name: String,
+    size_bytes: u64,
+    #[serde(default)]
+    mime_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChunkedImportInput {
+    files: Vec<ChunkedImportFileInput>,
+    #[serde(default)]
+    links: Vec<LinkInput>,
+    #[serde(default)]
+    prompt: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChunkedImportResponse {
+    job: ImportJobResponse,
+    chunk_size_bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChunkUploadResponse {
+    received_bytes: u64,
+    total_bytes: u64,
+    progress: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -284,6 +320,14 @@ struct StoredFileInput {
     mime_type: String,
     size_bytes: i64,
     sha256: String,
+}
+
+#[derive(Debug, FromRow)]
+struct ChunkedStoredFileInput {
+    id: String,
+    display_name: String,
+    local_path: String,
+    size_bytes: i64,
 }
 
 struct ClaimedJob<'a> {
@@ -533,6 +577,362 @@ pub async fn create(
     Ok((StatusCode::ACCEPTED, Json(load_job(&state, &job_id).await?)))
 }
 
+pub async fn create_chunked(
+    State(state): State<AppState>,
+    AuthContext(identity): AuthContext,
+    Json(input): Json<ChunkedImportInput>,
+) -> Result<(StatusCode, Json<ChunkedImportResponse>), AppError> {
+    if !identity.can_access_icthub() {
+        return Err(AppError::Forbidden);
+    }
+    if input.files.is_empty() {
+        return Err(AppError::BadRequest("分片上传至少需要一个附件".to_owned()));
+    }
+    if input.files.len() > 50 {
+        return Err(AppError::BadRequest(
+            "单个任务最多上传 50 个附件".to_owned(),
+        ));
+    }
+    if input.prompt.chars().count() > 4_000 {
+        return Err(AppError::BadRequest(
+            "项目简介不能超过 4000 个字符".to_owned(),
+        ));
+    }
+    if input.links.len() > 20 {
+        return Err(AppError::BadRequest(
+            "单个任务最多附加 20 个链接".to_owned(),
+        ));
+    }
+    validate_links(&input.links)?;
+    let total_size = input.files.iter().try_fold(0_u64, |total, file| {
+        total
+            .checked_add(file.size_bytes)
+            .ok_or_else(|| AppError::BadRequest("附件总大小超过上传限制".to_owned()))
+    })?;
+    if total_size > state.import_max_upload_bytes {
+        return Err(AppError::BadRequest(format!(
+            "附件总大小超过上传限制（{} MB）",
+            state.import_max_upload_bytes / 1024 / 1024
+        )));
+    }
+
+    let job_id = Uuid::new_v4().to_string();
+    let job_dir = state.import_root.join(&job_id);
+    let mut job_dir_guard = JobDirectoryGuard::new(job_dir.clone());
+    let source_dir = job_dir.join("source");
+    tokio::fs::create_dir_all(&source_dir).await?;
+    let mut files = Vec::with_capacity(input.files.len());
+    for file in &input.files {
+        let id = Uuid::new_v4().to_string();
+        let display_name = safe_upload_name(&file.name);
+        let mime_type = file
+            .mime_type
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("application/octet-stream")
+            .chars()
+            .take(200)
+            .collect::<String>();
+        let input_dir = source_dir.join(&id);
+        tokio::fs::create_dir_all(&input_dir).await?;
+        let local_path = input_dir.join(&display_name);
+        tokio::fs::File::create(&local_path).await?;
+        files.push((id, display_name, mime_type, file.size_bytes, local_path));
+    }
+    let source_name = if files.len() == 1 {
+        files[0].1.clone()
+    } else {
+        format!("{} 等 {} 个附件", files[0].1, files.len())
+    };
+    let source_kind = if files.len() == 1 && is_zip_path(&files[0].4) {
+        "zip"
+    } else {
+        "mixed"
+    };
+
+    let mut tx = state.db.begin().await?;
+    sqlx::query(
+        "INSERT INTO import_jobs (
+            id, status, stage, progress, source_kind, source_name, created_by_sid
+         ) VALUES (?, 'uploading', '准备上传附件', 1, ?, ?, ?)",
+    )
+    .bind(&job_id)
+    .bind(source_kind)
+    .bind(&source_name)
+    .bind(&identity.sid)
+    .execute(&mut *tx)
+    .await?;
+    insert_event_tx(
+        &mut tx,
+        &job_id,
+        "upload_started",
+        "uploading",
+        "准备上传附件",
+        1,
+        Some("已建立分片上传任务，开始接收附件"),
+    )
+    .await?;
+    for (index, (id, display_name, mime_type, size_bytes, local_path)) in files.iter().enumerate() {
+        let local_path = local_path
+            .strip_prefix(&job_dir)
+            .map(path_for_json)
+            .unwrap_or_else(|_| path_for_json(local_path));
+        sqlx::query(
+            "INSERT INTO import_inputs (
+                id, job_id, input_kind, provider, display_name, source_ref, local_path,
+                mime_type, size_bytes, sha256, sort_order, status
+             ) VALUES (?, ?, 'file', 'upload', ?, '0', ?, ?, ?, '', ?, ?)",
+        )
+        .bind(id)
+        .bind(&job_id)
+        .bind(display_name)
+        .bind(local_path)
+        .bind(mime_type)
+        .bind(*size_bytes as i64)
+        .bind(index as i64)
+        .bind(if *size_bytes == 0 {
+            "uploaded"
+        } else {
+            "uploading"
+        })
+        .execute(&mut *tx)
+        .await?;
+    }
+    if !input.prompt.trim().is_empty() {
+        sqlx::query(
+            "INSERT INTO import_inputs (
+                id, job_id, input_kind, provider, display_name, source_ref, sort_order, status
+             ) VALUES (?, ?, 'prompt', 'user', '项目简介', ?, ?, 'parsed')",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(&job_id)
+        .bind(input.prompt.trim())
+        .bind(files.len() as i64)
+        .execute(&mut *tx)
+        .await?;
+    }
+    for (index, link) in input.links.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO import_inputs (
+                id, job_id, input_kind, provider, display_name, source_ref, sort_order, status
+             ) VALUES (?, ?, 'link', ?, ?, ?, ?, 'pending_parser')",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(&job_id)
+        .bind(link_provider(&link.url))
+        .bind(
+            link.title
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(&link.url),
+        )
+        .bind(&link.url)
+        .bind((files.len() + usize::from(!input.prompt.trim().is_empty()) + index) as i64)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    job_dir_guard.keep();
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ChunkedImportResponse {
+            job: load_job(&state, &job_id).await?,
+            chunk_size_bytes: IMPORT_CHUNK_SIZE_BYTES,
+        }),
+    ))
+}
+
+pub async fn upload_chunk(
+    State(state): State<AppState>,
+    AuthContext(identity): AuthContext,
+    AxumPath((id, input_id)): AxumPath<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<ChunkUploadResponse>, AppError> {
+    if !identity.can_access_icthub() {
+        return Err(AppError::Forbidden);
+    }
+    ensure_job_owner(&state, &id, &identity.sid, identity.is_superadmin()).await?;
+    if body.is_empty() || body.len() > IMPORT_CHUNK_SIZE_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "单个分片必须在 1 字节到 {} MB 之间",
+            IMPORT_CHUNK_SIZE_BYTES / 1024 / 1024
+        )));
+    }
+    let offset = headers
+        .get("x-upload-offset")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| AppError::BadRequest("缺少有效的上传偏移量".to_owned()))?;
+    let stored = sqlx::query_as::<_, (String, String, i64, String)>(
+        "SELECT i.local_path, i.display_name, i.size_bytes, j.status
+         FROM import_inputs i
+         JOIN import_jobs j ON j.id = i.job_id
+         WHERE i.id = ? AND i.job_id = ? AND i.input_kind = 'file'",
+    )
+    .bind(&input_id)
+    .bind(&id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if stored.3 != "uploading" {
+        return Err(AppError::Conflict("该任务当前不接受附件分片".to_owned()));
+    }
+    let expected_size = stored.2.max(0) as u64;
+    let relative_path = Path::new(&stored.0);
+    if !is_safe_relative_path(relative_path) {
+        return Err(AppError::BadRequest("附件存储路径不安全".to_owned()));
+    }
+    let local_path = state.import_root.join(&id).join(relative_path);
+    let current_size = tokio::fs::metadata(&local_path).await?.len();
+    let next_size = offset
+        .checked_add(body.len() as u64)
+        .ok_or_else(|| AppError::BadRequest("上传偏移量无效".to_owned()))?;
+    if next_size > expected_size {
+        return Err(AppError::BadRequest("分片超过附件声明大小".to_owned()));
+    }
+    if offset == current_size {
+        let mut output = tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&local_path)
+            .await?;
+        output.write_all(&body).await?;
+        output.flush().await?;
+    } else if next_size == current_size {
+        let mut existing = tokio::fs::File::open(&local_path).await?;
+        existing.seek(SeekFrom::Start(offset)).await?;
+        let mut previous = vec![0_u8; body.len()];
+        existing.read_exact(&mut previous).await?;
+        if previous.as_slice() != body.as_ref() {
+            return Err(AppError::Conflict(
+                "该上传偏移量已经写入不同内容".to_owned(),
+            ));
+        }
+    } else {
+        return Err(AppError::Conflict(format!(
+            "上传偏移量不连续，服务器当前已接收 {current_size} 字节"
+        )));
+    }
+
+    sqlx::query(
+        "UPDATE import_inputs SET source_ref = ?, status = ?
+         WHERE id = ? AND job_id = ?",
+    )
+    .bind(next_size.to_string())
+    .bind(if next_size == expected_size {
+        "uploaded"
+    } else {
+        "uploading"
+    })
+    .bind(&input_id)
+    .bind(&id)
+    .execute(&state.db)
+    .await?;
+    let (received_bytes, total_bytes) = chunked_upload_totals(&state, &id).await?;
+    let progress = upload_progress(received_bytes, total_bytes);
+    sqlx::query(
+        "UPDATE import_jobs SET stage = ?, progress = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND status = 'uploading'",
+    )
+    .bind(format!("正在上传：{}", stored.1))
+    .bind(progress)
+    .bind(&id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(ChunkUploadResponse {
+        received_bytes,
+        total_bytes,
+        progress,
+    }))
+}
+
+pub async fn complete_chunked(
+    State(state): State<AppState>,
+    AuthContext(identity): AuthContext,
+    AxumPath(id): AxumPath<String>,
+) -> Result<(StatusCode, Json<ImportJobResponse>), AppError> {
+    if !identity.can_access_icthub() {
+        return Err(AppError::Forbidden);
+    }
+    ensure_job_owner(&state, &id, &identity.sid, identity.is_superadmin()).await?;
+    let status = sqlx::query_scalar::<_, String>("SELECT status FROM import_jobs WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await?;
+    if status != "uploading" {
+        if status == "cancelled" {
+            return Err(AppError::Conflict("该上传任务已取消".to_owned()));
+        }
+        return Ok((StatusCode::ACCEPTED, Json(load_job(&state, &id).await?)));
+    }
+    let files = sqlx::query_as::<_, ChunkedStoredFileInput>(
+        "SELECT id, display_name, local_path, size_bytes
+         FROM import_inputs WHERE job_id = ? AND input_kind = 'file'
+         ORDER BY sort_order ASC, created_at ASC",
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await?;
+    if files.is_empty() {
+        return Err(AppError::BadRequest("上传任务没有附件".to_owned()));
+    }
+    let job_dir = state.import_root.join(&id);
+    let mut completed_files = Vec::with_capacity(files.len());
+    for file in files {
+        let relative_path = Path::new(&file.local_path);
+        if !is_safe_relative_path(relative_path) {
+            return Err(AppError::BadRequest("附件存储路径不安全".to_owned()));
+        }
+        let local_path = job_dir.join(relative_path);
+        let actual_size = tokio::fs::metadata(&local_path).await?.len();
+        let expected_size = file.size_bytes.max(0) as u64;
+        if actual_size != expected_size {
+            return Err(AppError::Conflict(format!(
+                "附件 {} 尚未上传完成（{actual_size}/{expected_size} 字节）",
+                file.display_name
+            )));
+        }
+        let sha256 = sha256_file(local_path).await?;
+        completed_files.push((file.id, actual_size, sha256));
+    }
+
+    let mut tx = state.db.begin().await?;
+    for (input_id, size_bytes, sha256) in completed_files {
+        sqlx::query(
+            "UPDATE import_inputs SET source_ref = NULL, size_bytes = ?, sha256 = ?, status = 'queued'
+             WHERE id = ? AND job_id = ?",
+        )
+        .bind(size_bytes as i64)
+        .bind(sha256)
+        .bind(input_id)
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query(
+        "UPDATE import_jobs SET status = 'queued', stage = '等待解析', progress = 8,
+            updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'uploading'",
+    )
+    .bind(&id)
+    .execute(&mut *tx)
+    .await?;
+    insert_event_tx(
+        &mut tx,
+        &id,
+        "upload_completed",
+        "queued",
+        "等待解析",
+        8,
+        Some("附件分片已完整保存，等待后台整理"),
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok((StatusCode::ACCEPTED, Json(load_job(&state, &id).await?)))
+}
+
 pub async fn detail(
     State(state): State<AppState>,
     AuthContext(identity): AuthContext,
@@ -688,6 +1088,46 @@ async fn ensure_job_owner(
         return Err(AppError::Forbidden);
     }
     Ok(())
+}
+
+async fn chunked_upload_totals(state: &AppState, job_id: &str) -> Result<(u64, u64), AppError> {
+    let totals = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT
+            COALESCE(SUM(CAST(COALESCE(source_ref, '0') AS INTEGER)), 0),
+            COALESCE(SUM(size_bytes), 0)
+         FROM import_inputs WHERE job_id = ? AND input_kind = 'file'",
+    )
+    .bind(job_id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok((totals.0.max(0) as u64, totals.1.max(0) as u64))
+}
+
+fn upload_progress(received_bytes: u64, total_bytes: u64) -> i64 {
+    if total_bytes == 0 {
+        8
+    } else {
+        (1 + (received_bytes.saturating_mul(7) / total_bytes) as i64).clamp(1, 8)
+    }
+}
+
+async fn sha256_file(path: PathBuf) -> Result<String, AppError> {
+    tokio::task::spawn_blocking(move || -> io::Result<String> {
+        let mut input = File::open(path)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0_u8; 1024 * 1024];
+        loop {
+            let read = input.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        Ok(format!("{:x}", hasher.finalize()))
+    })
+    .await
+    .map_err(|error| AppError::Io(io::Error::other(error.to_string())))?
+    .map_err(AppError::Io)
 }
 
 async fn is_cancelled(state: &AppState, job_id: &str) -> anyhow::Result<bool> {

@@ -75,6 +75,20 @@ function job(overrides: Partial<ImportJob> = {}): ImportJob {
 }
 
 describe('import workflow visualization', () => {
+  it('keeps collection active while chunked files are uploading', () => {
+    expect(
+      workflowSteps(
+        job({
+          status: 'uploading',
+          stage: '正在上传附件',
+          progress: 4,
+          events: [],
+          result: null,
+        }),
+      ),
+    ).toEqual(['active', 'pending', 'pending', 'pending', 'pending'])
+  })
+
   it('keeps Codex and confirmation pending before refinement', () => {
     expect(workflowSteps(job())).toEqual(['complete', 'complete', 'complete', 'pending', 'pending'])
     expect(agentStatusLabel(job())).toBe('等待补充提示')

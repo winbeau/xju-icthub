@@ -1,6 +1,6 @@
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -8,6 +8,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use crate::{auth, covers, imports, projects, state::AppState, tags};
 
 const IMPORT_REQUEST_BODY_LIMIT_BYTES: usize = 512 * 1024 * 1024;
+const IMPORT_CHUNK_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024 + 64 * 1024;
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
@@ -21,6 +22,15 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/v1/import-jobs",
             post(imports::create).layer(DefaultBodyLimit::max(IMPORT_REQUEST_BODY_LIMIT_BYTES)),
+        )
+        .route("/api/v1/import-jobs/chunked", post(imports::create_chunked))
+        .route(
+            "/api/v1/import-jobs/{id}/inputs/{input_id}/chunks",
+            put(imports::upload_chunk).layer(DefaultBodyLimit::max(IMPORT_CHUNK_BODY_LIMIT_BYTES)),
+        )
+        .route(
+            "/api/v1/import-jobs/{id}/complete",
+            post(imports::complete_chunked),
         )
         .route("/api/v1/import-jobs/{id}", get(imports::detail))
         .route("/api/v1/import-jobs/{id}/cancel", post(imports::cancel))
@@ -347,6 +357,127 @@ mod tests {
                         .is_some_and(|text| text.contains("视觉项目说明"))
             })
         }));
+    }
+
+    #[tokio::test]
+    async fn lab_member_can_upload_file_in_retryable_chunks() {
+        let identity_url = spawn_identity_service().await;
+        let state = AppState::for_test_with_identity_url(&identity_url)
+            .await
+            .expect("test state");
+        let app = build_router(state.clone());
+        let contents = b"project name: chunked upload\nReact Web utility";
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/import-jobs/chunked")
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "files": [{
+                                "name": "README.md",
+                                "sizeBytes": contents.len(),
+                                "mimeType": "text/markdown"
+                            }],
+                            "links": [],
+                            "prompt": "这是一个 Web 日常工具"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("chunked init response");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let bytes = to_bytes(response.into_body(), 128 * 1024)
+            .await
+            .expect("chunked init body");
+        let initialized: Value = serde_json::from_slice(&bytes).expect("chunked init json");
+        let job_id = initialized["job"]["id"].as_str().expect("chunked job id");
+        let input_id = initialized["job"]["inputs"][0]["id"]
+            .as_str()
+            .expect("chunked input id");
+        assert_eq!(initialized["job"]["status"], "uploading");
+
+        let split = 17;
+        for (offset, chunk) in [(0, &contents[..split]), (split, &contents[split..])] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri(format!(
+                            "/api/v1/import-jobs/{job_id}/inputs/{input_id}/chunks"
+                        ))
+                        .header(header::AUTHORIZATION, "Bearer member")
+                        .header(header::CONTENT_TYPE, "application/octet-stream")
+                        .header("x-upload-offset", offset.to_string())
+                        .body(Body::from(chunk.to_vec()))
+                        .unwrap(),
+                )
+                .await
+                .expect("chunk response");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let duplicate = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!(
+                        "/api/v1/import-jobs/{job_id}/inputs/{input_id}/chunks"
+                    ))
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .header(header::CONTENT_TYPE, "application/octet-stream")
+                    .header("x-upload-offset", split.to_string())
+                    .body(Body::from(contents[split..].to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .expect("duplicate chunk response");
+        assert_eq!(duplicate.status(), StatusCode::OK);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/import-jobs/{job_id}/complete"))
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .expect("chunked complete response");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let worker = ImportWorkerOptions::new(50, 30);
+        assert!(process_one_queued_job(&state, &worker)
+            .await
+            .expect("worker processes chunked job"));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/import-jobs/{job_id}"))
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("chunked detail response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 256 * 1024)
+            .await
+            .expect("chunked detail body");
+        let detail: Value = serde_json::from_slice(&bytes).expect("chunked detail json");
+        assert_eq!(detail["status"], "completed");
+        assert_eq!(detail["inputs"][0]["status"], "parsed");
     }
 
     #[tokio::test]
