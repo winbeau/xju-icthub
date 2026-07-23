@@ -40,7 +40,7 @@ impl Config {
         let import_root = env::var_os("ICTHUB_IMPORT_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("uploads").join("imports"));
-        let import_max_upload_bytes = env_u64("ICTHUB_IMPORT_MAX_UPLOAD_MB", 256)? * 1024 * 1024;
+        let import_max_upload_bytes = env_u64("ICTHUB_IMPORT_MAX_UPLOAD_MB", 500)? * 1024 * 1024;
         let import_max_unpacked_bytes =
             env_u64("ICTHUB_IMPORT_MAX_UNPACKED_MB", 768)? * 1024 * 1024;
         let import_worker_embedded = env_bool("ICTHUB_IMPORT_WORKER_EMBEDDED", true)?;

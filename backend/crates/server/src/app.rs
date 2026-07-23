@@ -7,6 +7,8 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{auth, covers, imports, projects, state::AppState, tags};
 
+const IMPORT_REQUEST_BODY_LIMIT_BYTES: usize = 512 * 1024 * 1024;
+
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
@@ -18,7 +20,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/projects/import", post(projects::import))
         .route(
             "/api/v1/import-jobs",
-            post(imports::create).layer(DefaultBodyLimit::max(256 * 1024 * 1024)),
+            post(imports::create).layer(DefaultBodyLimit::max(IMPORT_REQUEST_BODY_LIMIT_BYTES)),
         )
         .route("/api/v1/import-jobs/{id}", get(imports::detail))
         .route("/api/v1/import-jobs/{id}/cancel", post(imports::cancel))
