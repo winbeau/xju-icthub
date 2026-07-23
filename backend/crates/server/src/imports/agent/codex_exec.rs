@@ -261,12 +261,14 @@ impl ImportAgentRunner for CodexExecRunner {
         })?;
 
         let prompt = agent_prompt(&request);
-        let mut stdin = child
-            .stdin
-            .take()
-            .context("Codex stdin was not available")?;
-        stdin.write_all(prompt.as_bytes()).await?;
-        stdin.shutdown().await?;
+        {
+            let mut stdin = child
+                .stdin
+                .take()
+                .context("Codex stdin was not available")?;
+            stdin.write_all(prompt.as_bytes()).await?;
+            stdin.shutdown().await?;
+        } // Drop the pipe handle so `codex exec -` observes EOF and starts the turn.
 
         let stdout = child
             .stdout
