@@ -17,6 +17,7 @@ pub struct Config {
     pub codex_enabled: bool,
     pub codex_bin: PathBuf,
     pub codex_home: PathBuf,
+    pub codex_runtime_root: PathBuf,
     pub codex_base_url: Option<String>,
     pub codex_model: Option<String>,
     pub codex_api_key_file: Option<PathBuf>,
@@ -57,6 +58,9 @@ impl Config {
         let codex_home = env::var_os("ICTHUB_CODEX_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("data").join("codex-home"));
+        let codex_runtime_root = env::var_os("ICTHUB_CODEX_RUNTIME_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("data").join("codex-runs"));
         let codex_base_url = non_empty_env("ICTHUB_CODEX_BASE_URL")?;
         let codex_model = non_empty_env("ICTHUB_CODEX_MODEL")?;
         let codex_api_key_file = env::var_os("ICTHUB_CODEX_API_KEY_FILE")
@@ -89,6 +93,7 @@ impl Config {
             codex_enabled,
             codex_bin,
             codex_home,
+            codex_runtime_root,
             codex_base_url,
             codex_model,
             codex_api_key_file,

@@ -24,6 +24,7 @@ pub(crate) struct CodexExecConfig {
     pub enabled: bool,
     pub binary: PathBuf,
     pub codex_home: PathBuf,
+    pub runtime_root: PathBuf,
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub api_key_file: Option<PathBuf>,
@@ -45,6 +46,9 @@ impl CodexExecRunner {
         }
         if config.codex_home.is_relative() {
             config.codex_home = startup_dir.join(&config.codex_home);
+        }
+        if config.runtime_root.is_relative() {
+            config.runtime_root = startup_dir.join(&config.runtime_root);
         }
         if let Some(api_key_file) = config.api_key_file.as_mut() {
             if api_key_file.is_relative() {
@@ -76,6 +80,7 @@ impl CodexExecRunner {
                 enabled: false,
                 binary: PathBuf::from("codex"),
                 codex_home: PathBuf::from("data/codex-home"),
+                runtime_root: PathBuf::from("data/codex-runs"),
                 base_url: None,
                 model: None,
                 api_key_file: None,
@@ -126,6 +131,42 @@ impl CodexExecRunner {
             "-".to_owned(),
         ])
     }
+
+    async fn prepare_runtime_home(&self, run_id: &str) -> anyhow::Result<tempfile::TempDir> {
+        tokio::fs::create_dir_all(&self.config.runtime_root)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to create Codex runtime root {}",
+                    self.config.runtime_root.display()
+                )
+            })?;
+        let runtime_home = tempfile::Builder::new()
+            .prefix(&format!("codex-{run_id}-"))
+            .tempdir_in(&self.config.runtime_root)
+            .with_context(|| {
+                format!(
+                    "failed to create a writable Codex runtime home in {}",
+                    self.config.runtime_root.display()
+                )
+            })?;
+
+        copy_codex_home_file(
+            &self.config.codex_home,
+            runtime_home.path(),
+            "config.toml",
+            false,
+        )
+        .await?;
+        copy_codex_home_file(
+            &self.config.codex_home,
+            runtime_home.path(),
+            "auth.json",
+            self.config.api_key_file.is_none(),
+        )
+        .await?;
+        Ok(runtime_home)
+    }
 }
 
 #[async_trait]
@@ -156,7 +197,7 @@ impl ImportAgentRunner for CodexExecRunner {
             bail!("Codex runner is disabled");
         }
         tokio::fs::create_dir_all(&request.analysis_dir).await?;
-        tokio::fs::create_dir_all(&self.config.codex_home).await?;
+        let runtime_home = self.prepare_runtime_home(&request.run_id).await?;
 
         let api_key = if let Some(api_key_file) = self.config.api_key_file.as_deref() {
             let value = tokio::fs::read_to_string(api_key_file)
@@ -190,7 +231,7 @@ impl ImportAgentRunner for CodexExecRunner {
         let mut command = Command::new(&self.config.binary);
         command
             .args(self.command_args(&request, &schema_path, &result_path)?)
-            .env("CODEX_HOME", &self.config.codex_home)
+            .env("CODEX_HOME", runtime_home.path())
             .env_remove("GH_TOKEN")
             .env_remove("GITHUB_TOKEN")
             .current_dir(&request.analysis_dir)
@@ -257,6 +298,47 @@ impl ImportAgentRunner for CodexExecRunner {
     }
 }
 
+async fn copy_codex_home_file(
+    source_home: &Path,
+    runtime_home: &Path,
+    file_name: &str,
+    required: bool,
+) -> anyhow::Result<()> {
+    let source = source_home.join(file_name);
+    if !source.is_file() {
+        if required {
+            bail!("required Codex home file is missing: {}", source.display());
+        }
+        return Ok(());
+    }
+
+    let destination = runtime_home.join(file_name);
+    tokio::fs::copy(&source, &destination)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to copy Codex home file {} into the writable runtime home",
+                source.display()
+            )
+        })?;
+    set_owner_only_permissions(&destination).await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn set_owner_only_permissions(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .await
+        .with_context(|| format!("failed to secure copied Codex file {}", path.display()))
+}
+
+#[cfg(not(unix))]
+async fn set_owner_only_permissions(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
 #[derive(Default)]
 struct EventSummary {
     thread_id: Option<String>,
@@ -313,6 +395,7 @@ mod tests {
             enabled: true,
             binary: PathBuf::from("vendor/codex/codex"),
             codex_home: PathBuf::from("data/codex-home"),
+            runtime_root: PathBuf::from("data/codex-runs"),
             base_url: Some("https://api.example.test/v1".to_owned()),
             model: Some("configured-model".to_owned()),
             api_key_file: Some(PathBuf::from("/run/secrets/codex-api-key")),
@@ -354,6 +437,7 @@ mod tests {
             enabled: true,
             binary: PathBuf::from("codex"),
             codex_home: directory.path().to_path_buf(),
+            runtime_root: directory.path().join("runs"),
             base_url: Some("https://api.example.test/v1".to_owned()),
             model: Some("configured-model".to_owned()),
             api_key_file: None,
@@ -374,6 +458,7 @@ mod tests {
             enabled: true,
             binary: PathBuf::from("tools/codex"),
             codex_home: directory.path().to_path_buf(),
+            runtime_root: directory.path().join("runs"),
             base_url: Some("https://api.example.test/v1".to_owned()),
             model: Some("configured-model".to_owned()),
             api_key_file: None,
@@ -383,6 +468,44 @@ mod tests {
 
         assert!(runner.config.binary.is_absolute());
         assert!(runner.config.binary.ends_with(Path::new("tools/codex")));
+    }
+
+    #[tokio::test]
+    async fn runtime_home_copies_only_codex_credentials_and_is_removed_on_drop() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let source_home = directory.path().join("source-home");
+        let runtime_root = directory.path().join("runs");
+        std::fs::create_dir_all(&source_home).expect("source home");
+        std::fs::write(source_home.join("config.toml"), "model = \"test\"").expect("config file");
+        std::fs::write(source_home.join("auth.json"), r#"{"token":"secret"}"#).expect("auth file");
+        std::fs::write(source_home.join("history.jsonl"), "must not be copied")
+            .expect("unrelated file");
+        let runner = CodexExecRunner::new(CodexExecConfig {
+            enabled: true,
+            binary: PathBuf::from("codex"),
+            codex_home: source_home,
+            runtime_root,
+            base_url: Some("https://api.example.test/v1".to_owned()),
+            model: Some("configured-model".to_owned()),
+            api_key_file: None,
+            timeout: Duration::from_secs(600),
+        })
+        .expect("runner");
+
+        let runtime_home = runner
+            .prepare_runtime_home("run-1")
+            .await
+            .expect("runtime home");
+        let runtime_path = runtime_home.path().to_path_buf();
+        assert_eq!(
+            std::fs::read_to_string(runtime_path.join("config.toml")).expect("copied config"),
+            "model = \"test\""
+        );
+        assert!(runtime_path.join("auth.json").is_file());
+        assert!(!runtime_path.join("history.jsonl").exists());
+
+        drop(runtime_home);
+        assert!(!runtime_path.exists());
     }
 
     #[tokio::test]

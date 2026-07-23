@@ -16,7 +16,7 @@ vendor 在仓库中；大内存构建机可显式设置 `ICTHUB_CODEX_BUILD_FROM
 
 ## 2. 写入密钥
 
-如果已经有 Codex 原生配置目录，优先直接使用，不复制密钥：
+如果已经有 Codex 原生配置目录，优先将它作为只读凭据来源：
 
 ```bash
 chmod 0700 ~/codex-config
@@ -24,7 +24,10 @@ chmod 0600 ~/codex-config/config.toml ~/codex-config/auth.json
 ```
 
 此时设置 `ICTHUB_CODEX_HOME=/home/winbeau/codex-config`，不配置
-`ICTHUB_CODEX_API_KEY_FILE`。如果没有原生 `auth.json`，再由管理员创建独立密钥文件；下面
+`ICTHUB_CODEX_API_KEY_FILE`。Worker 不会直接在这个目录运行 Codex，而是仅将
+`config.toml`、`auth.json` 复制到 `backend/data/codex-runs` 下的临时 `0700` 目录，文件
+权限收紧为 `0600`，运行结束自动删除。因此 systemd 可以继续保持
+`ProtectHome=read-only`。如果没有原生 `auth.json`，再由管理员创建独立密钥文件；下面
 的占位符不要原样执行：
 
 ```bash
@@ -45,6 +48,7 @@ sudo chown winbeau:winbeau /etc/icthub/codex-api-key
 ICTHUB_CODEX_ENABLED=true
 ICTHUB_CODEX_BIN=tools/codex
 ICTHUB_CODEX_HOME=/home/winbeau/codex-config
+ICTHUB_CODEX_RUNTIME_ROOT=data/codex-runs
 ICTHUB_CODEX_BASE_URL=https://模型代理/v1
 ICTHUB_CODEX_MODEL=管理员确认的模型名
 ICTHUB_CODEX_TIMEOUT_SECS=600

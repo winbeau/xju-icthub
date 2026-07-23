@@ -46,11 +46,13 @@ impl AppState {
         sqlx::migrate!("../../migrations").run(&db).await?;
         std::fs::create_dir_all(&config.import_root)?;
         std::fs::create_dir_all(&config.codex_home)?;
+        std::fs::create_dir_all(&config.codex_runtime_root)?;
 
         let import_agent = CodexExecRunner::new(CodexExecConfig {
             enabled: config.codex_enabled,
             binary: config.codex_bin.clone(),
             codex_home: config.codex_home.clone(),
+            runtime_root: config.codex_runtime_root.clone(),
             base_url: config.codex_base_url.clone(),
             model: config.codex_model.clone(),
             api_key_file: config.codex_api_key_file.clone(),

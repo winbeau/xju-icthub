@@ -1482,7 +1482,13 @@ async fn process_agent_job(
         Ok(outcome) => outcome,
         Err(error) => {
             let message = user_facing_agent_error(&error);
-            tracing::warn!(job_id = %job_id, run_id = %run_id, reason = %message, "Codex analysis fell back to deterministic draft");
+            tracing::warn!(
+                job_id = %job_id,
+                run_id = %run_id,
+                error = %format!("{error:#}"),
+                user_message = %message,
+                "Codex analysis fell back to deterministic draft"
+            );
             sqlx::query(
                 "UPDATE agent_runs SET status = 'failed', error_message = ?,
                     completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
