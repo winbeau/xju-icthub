@@ -4,12 +4,15 @@
 
 ## 1. 构建
 
-`deploy/build-production.sh` 会初始化 `vendor/codex` 子模块，构建 ICTHub 后端和固定版本
-的 Codex CLI，并将后者放到：
+`deploy/build-production.sh` 会初始化 `vendor/codex` 子模块，构建 ICTHub 后端，并通过
+vendored 官方安装器下载、校验与源码相同版本的 Codex CLI，将其放到：
 
 ```text
 /home/winbeau/xju-icthub/backend/tools/codex
 ```
+
+生产服务器不从源码链接 Codex，避免 8 GiB 内存主机在 Thin-LTO 阶段 OOM。源码仍完整
+vendor 在仓库中；大内存构建机可显式设置 `ICTHUB_CODEX_BUILD_FROM_SOURCE=true`。
 
 ## 2. 写入密钥
 

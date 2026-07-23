@@ -32,11 +32,13 @@ ICTHUB_CODEX_TIMEOUT_SECS=600
 RUST_LOG=icthub_server=info,tower_http=info
 ```
 
-Codex 已固定在 `vendor/codex` 的版本提交，构建脚本会编译 `codex exec` 并放到
-`backend/tools/codex`。首测阶段保持 `ICTHUB_CODEX_ENABLED=false`；本地整理草稿仍然可用。
-上游发布提交的 `Cargo.lock` 仍将 workspace 包标记为 `0.0.0`；脚本会临时执行
-`cargo update --workspace`，只允许这些版本行变为当前发布版本，拒绝其他依赖锁变化，构建后
-恢复子模块原始锁文件并输出规范化锁文件哈希。
+Codex 已固定在 `vendor/codex` 的版本提交。生产构建默认调用 vendored 官方安装器，下载并
+校验同版本的 Linux 预编译包，安装到 `backend/tools/codex`。这样保留源码审计和版本锁定，
+同时避免 8 GiB 主机在 Thin-LTO 链接阶段 OOM。需要在大内存构建机验证源码构建时，可设置
+`ICTHUB_CODEX_BUILD_FROM_SOURCE=true`；该模式会临时规范化上游 `Cargo.lock` 中 workspace
+包的 `0.0.0` 版本，拒绝其他锁文件变化，并在构建后恢复原始锁文件。
+
+首测阶段保持 `ICTHUB_CODEX_ENABLED=false`；本地整理草稿仍然可用。
 需要启用真实 Agent 时，如果服务器已有 Codex 原生配置目录，可直接在 `backend/.env` 增加：
 
 ```dotenv
