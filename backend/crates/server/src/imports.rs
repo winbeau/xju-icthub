@@ -1446,6 +1446,7 @@ async fn process_agent_job(
     )
     .await?;
 
+    let member_prompt = refinement_prompt.clone();
     let request = AgentRunRequest {
         run_id: run_id.clone(),
         job_id: job_id.to_owned(),
@@ -1478,7 +1479,7 @@ async fn process_agent_job(
         return Ok(());
     };
 
-    let outcome = match outcome {
+    let mut outcome = match outcome {
         Ok(outcome) => outcome,
         Err(error) => {
             let message = user_facing_agent_error(&error);
@@ -1531,6 +1532,7 @@ async fn process_agent_job(
             return Ok(());
         }
     };
+    enforce_cautious_agent_fields(&mut outcome.result, &member_prompt);
 
     if is_cancelled(state, job_id).await? {
         return Ok(());
@@ -1633,6 +1635,36 @@ fn apply_agent_result(analysis: &mut ImportAnalysis, result: AgentImportResult, 
         message: "Codex 已读取清洗后的分析包并生成结构化草稿。".to_owned(),
     };
     analysis.capabilities.codex_agent = "prototype_ready".to_owned();
+}
+
+fn enforce_cautious_agent_fields(result: &mut AgentImportResult, member_prompt: &str) {
+    let prompt = member_prompt.to_lowercase();
+    let explicitly_mentioned = |value: &str| {
+        let value = value.trim().to_lowercase();
+        !value.is_empty() && prompt.contains(&value)
+    };
+
+    let original_tag_count = result.suggested_tags.len();
+    result
+        .suggested_tags
+        .retain(|value| explicitly_mentioned(&value.value));
+    if result.suggested_tags.len() != original_tag_count {
+        result
+            .warnings
+            .push("材料中识别到技术方向，但成员简介未明确指定标签，标签保持为空。".to_owned());
+    }
+    result.owner = result
+        .owner
+        .take()
+        .filter(|value| explicitly_mentioned(&value.value));
+    result.source = result
+        .source
+        .take()
+        .filter(|value| explicitly_mentioned(&value.value));
+    result.highest_award = result
+        .highest_award
+        .take()
+        .filter(|value| explicitly_mentioned(&value.value));
 }
 
 async fn process_job(
@@ -3002,9 +3034,49 @@ mod tests {
     use zip::{write::SimpleFileOptions, ZipWriter};
 
     use super::{
-        analyze_context_only, artifact_kind, decoded_zip_entry_path, prepare_normalized_archive,
-        safe_extract_and_analyze, ExtractorTools, UploadedInput,
+        analyze_context_only, artifact_kind, decoded_zip_entry_path, enforce_cautious_agent_fields,
+        prepare_normalized_archive, safe_extract_and_analyze, AgentImportResult, ExtractorTools,
+        UploadedInput,
     };
+
+    #[test]
+    fn agent_cautious_fields_must_appear_in_the_member_prompt() {
+        let mut result: AgentImportResult = serde_json::from_value(serde_json::json!({
+            "projectName": "Kylin Sentinel Agent",
+            "summary": "安全运维 Agent。",
+            "primaryCategory": "AI 软件",
+            "suggestedTags": [
+                {"value": "MCP", "evidence": "材料正文提到 MCP。"},
+                {"value": "安全审计", "evidence": "材料正文提到审计。"}
+            ],
+            "owner": {"value": "孙健康", "evidence": "成员提示明确说明。"},
+            "source": {"value": "课程项目", "evidence": "材料正文提到课程。"},
+            "highestAward": {"value": "一等奖", "evidence": "材料正文提到奖项。"},
+            "resources": {
+                "sourceCode": [],
+                "documents": [],
+                "presentations": [],
+                "videos": [],
+                "links": []
+            },
+            "warnings": []
+        }))
+        .expect("agent result");
+
+        enforce_cautious_agent_fields(&mut result, "这是孙健康学长的项目");
+
+        assert!(result.suggested_tags.is_empty());
+        assert_eq!(
+            result.owner.as_ref().map(|value| value.value.as_str()),
+            Some("孙健康")
+        );
+        assert!(result.source.is_none());
+        assert!(result.highest_award.is_none());
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("标签保持为空")));
+    }
 
     #[test]
     fn categorizes_common_project_artifacts() {
