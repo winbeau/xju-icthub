@@ -420,8 +420,11 @@ function JobResult({
                     <ul className="ml-7 mt-3 space-y-2">
                       {artifacts.slice(0, 30).map((artifact) => (
                         <li key={artifact.id} className="flex items-center gap-3 text-sm">
-                          <span className="min-w-0 flex-1 truncate text-text-muted">
-                            {artifact.relativePath}
+                          <span
+                            className="min-w-0 flex-1 truncate text-text-muted"
+                            title={artifact.relativePath}
+                          >
+                            {artifact.displayPath}
                           </span>
                           {artifact.isCoverCandidate && (
                             <span className="rounded bg-bg-subtle px-2 py-0.5 text-xs text-text-faint">
@@ -671,7 +674,7 @@ function artifactResource(artifact: ImportArtifact): ProjectResourceInput {
   )[artifact.artifactKind as 'document' | 'presentation' | 'video' | 'image' | 'archive']
   return {
     type,
-    title: artifact.relativePath.split('/').at(-1) ?? artifact.relativePath,
+    title: artifact.displayPath.split('/').at(-1) ?? artifact.displayPath,
     url: null,
   }
 }

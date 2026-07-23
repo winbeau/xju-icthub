@@ -364,6 +364,7 @@ mod tests {
         let artifacts = detail["artifacts"].as_array().expect("artifact list");
         assert!(artifacts.iter().any(|artifact| {
             artifact["relativePath"] == "vision/docs/说明.docx"
+                && artifact["displayPath"] == "vision/docs/说明.docx"
                 && artifact["extractor"] == "docx_text"
                 && artifact["metadata"]["paragraphCount"] == 1
         }));
@@ -386,10 +387,11 @@ mod tests {
         let bundle: Value =
             serde_json::from_slice(&std::fs::read(bundle_path).expect("analysis bundle file"))
                 .expect("analysis bundle JSON");
-        assert_eq!(bundle["schemaVersion"], "1.0");
+        assert_eq!(bundle["schemaVersion"], "1.1");
         assert!(bundle["artifacts"].as_array().is_some_and(|artifacts| {
             artifacts.iter().any(|artifact| {
                 artifact["relativePath"] == "vision/docs/说明.docx"
+                    && artifact["displayPath"] == "vision/docs/说明.docx"
                     && artifact["textExcerpt"]
                         .as_str()
                         .is_some_and(|text| text.contains("视觉项目说明"))

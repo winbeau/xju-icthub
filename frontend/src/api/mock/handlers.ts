@@ -255,6 +255,7 @@ registerMock('POST', '/api/v1/import-jobs', ({ body, headers }) => {
     return {
       id: crypto.randomUUID(),
       relativePath: file.name,
+      displayPath: file.name,
       artifactKind: kind,
       mimeType: file.type || null,
       sizeBytes: file.size,

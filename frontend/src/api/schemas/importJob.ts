@@ -15,6 +15,7 @@ export const ImportInputSchema = z.object({
 export const ImportArtifactSchema = z.object({
   id: z.string(),
   relativePath: z.string(),
+  displayPath: z.string(),
   artifactKind: z.enum([
     'code',
     'document',
