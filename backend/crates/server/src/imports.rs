@@ -106,6 +106,7 @@ pub struct ImportJobResponse {
     artifacts: Vec<ImportArtifactView>,
     events: Vec<ImportJobEventView>,
     agent_runs: Vec<AgentRunView>,
+    github_publication: Option<crate::github::GitHubPublicationView>,
     result: Option<ImportAnalysis>,
 }
 
@@ -1106,11 +1107,10 @@ async fn chunked_upload_totals(state: &AppState, job_id: &str) -> Result<(u64, u
 }
 
 fn upload_progress(received_bytes: u64, total_bytes: u64) -> i64 {
-    if total_bytes == 0 {
-        8
-    } else {
-        (1 + (received_bytes.saturating_mul(7) / total_bytes) as i64).clamp(1, 8)
-    }
+    received_bytes
+        .saturating_mul(7)
+        .checked_div(total_bytes)
+        .map_or(8, |progress| (1 + progress as i64).clamp(1, 8))
 }
 
 async fn sha256_file(path: PathBuf) -> Result<String, AppError> {
@@ -1148,6 +1148,19 @@ pub async fn run_import_worker(
 ) -> anyhow::Result<()> {
     tracing::info!(worker_id = %options.worker_id, "import worker started");
     loop {
+        match crate::github::process_one_queued_publication(&state, &options).await {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => {
+                tracing::error!(
+                    worker_id = %options.worker_id,
+                    error = %error,
+                    "GitHub publication worker polling failed"
+                );
+                tokio::time::sleep(options.poll_interval.max(Duration::from_secs(1))).await;
+                continue;
+            }
+        }
         match process_one_queued_job(&state, &options).await {
             Ok(true) => {}
             Ok(false) => tokio::time::sleep(options.poll_interval).await,
@@ -1834,7 +1847,7 @@ async fn update_progress(
     Ok(())
 }
 
-async fn insert_event(
+pub(crate) async fn insert_event(
     state: &AppState,
     job_id: &str,
     event_type: &str,
@@ -2904,7 +2917,7 @@ fn link_provider(url: &str) -> &'static str {
     }
 }
 
-async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResponse, AppError> {
+pub(crate) async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResponse, AppError> {
     let row = sqlx::query_as::<_, ImportJobRow>(
         "SELECT id, status, stage, progress, source_kind, source_name, analysis_engine,
                 result_json, error_message, created_at, updated_at, attempt_count,
@@ -2961,12 +2974,20 @@ async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResponse, AppEr
             is_cover_candidate: row.is_cover_candidate,
         })
         .collect::<Vec<_>>();
-    let result = row
+    let mut result: Option<ImportAnalysis> = row
         .result_json
         .as_deref()
         .map(serde_json::from_str)
         .transpose()
         .map_err(|_| AppError::BadRequest("导入结果损坏".to_owned()))?;
+    if let Some(result) = result.as_mut() {
+        result.capabilities.github_publish = if state.github_publisher.enabled() {
+            "ready".to_owned()
+        } else {
+            "awaiting_credentials".to_owned()
+        };
+    }
+    let github_publication = crate::github::load_publication(state, id).await?;
     Ok(ImportJobResponse {
         id: row.id,
         status: row.status,
@@ -2987,6 +3008,7 @@ async fn load_job(state: &AppState, id: &str) -> Result<ImportJobResponse, AppEr
         artifacts,
         events,
         agent_runs,
+        github_publication,
         result,
     })
 }

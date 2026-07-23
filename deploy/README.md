@@ -29,6 +29,12 @@ ICTHUB_CODEX_ENABLED=false
 ICTHUB_CODEX_BIN=tools/codex
 ICTHUB_CODEX_HOME=data/codex-home
 ICTHUB_CODEX_TIMEOUT_SECS=600
+ICTHUB_GITHUB_ENABLED=false
+ICTHUB_GITHUB_REPO_PREFIX=ict
+ICTHUB_GH_BIN=gh
+ICTHUB_GIT_BIN=git
+ICTHUB_GITHUB_RUNTIME_ROOT=data/github-runs
+ICTHUB_GITHUB_TIMEOUT_SECS=900
 RUST_LOG=icthub_server=info,tower_http=info
 ```
 
@@ -58,6 +64,21 @@ Codex 的子工具环境使用 `core` 环境白名单并启用默认
 生产环境使用独立 Worker，`icthub-backend.service` 已固定
 `ICTHUB_IMPORT_WORKER_EMBEDDED=false`。本地开发不启动独立 Worker 时，可以保留默认值
 `true`，由 API 进程内嵌运行单个 Worker。
+
+私有源码仓库发布由同一个持久化 Worker 执行，但使用独立的 `github_publications` 队列。
+启用前需要安装 GitHub CLI，并将组织 Token 写入服务器上的独立文件：
+
+```dotenv
+ICTHUB_GITHUB_ENABLED=true
+ICTHUB_GITHUB_OWNER=xjuIcthub
+ICTHUB_GITHUB_REPO_PREFIX=ict
+ICTHUB_GITHUB_TOKEN_FILE=/etc/icthub/github-token
+```
+
+Token 文件必须为 `0600`，内容仅一行；不要执行 `gh auth login`，Worker 只在 `gh` 子进程中
+临时注入 `GH_TOKEN`。发布器创建 `private` 仓库，仓库名形如
+`ict-0001-project-slug`。推送前会删除 `.git` 和生成目录，拒绝符号链接、常见密钥文件、
+疑似密钥内容以及超过 GitHub 100 MiB 限制的单文件。
 
 视频元数据、视频封面和 PDF 首页预览需要：
 

@@ -5,7 +5,7 @@ use axum::{
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
-use crate::{auth, covers, imports, projects, state::AppState, tags};
+use crate::{auth, covers, github, imports, projects, state::AppState, tags};
 
 const IMPORT_REQUEST_BODY_LIMIT_BYTES: usize = 512 * 1024 * 1024;
 const IMPORT_CHUNK_BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024 + 64 * 1024;
@@ -35,6 +35,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/import-jobs/{id}", get(imports::detail))
         .route("/api/v1/import-jobs/{id}/cancel", post(imports::cancel))
         .route("/api/v1/import-jobs/{id}/refine", post(imports::refine))
+        .route(
+            "/api/v1/import-jobs/{id}/github/publish",
+            post(github::queue_publication),
+        )
         .route("/api/v1/tags", get(tags::list).post(tags::create))
         .route("/api/v1/tags/{id}", axum::routing::patch(tags::update))
         .route("/api/v1/tags/{id}/merge", post(tags::merge))
@@ -84,6 +88,10 @@ mod tests {
 
     use super::build_router;
     use crate::{
+        github::{
+            process_one_queued_publication, GitHubPublishOutcome, GitHubPublishRequest,
+            GitHubPublisher,
+        },
         imports::{
             agent::{
                 AgentImportResult, AgentNormalizedResources, AgentResource, AgentRunOutcome,
@@ -93,6 +101,36 @@ mod tests {
         },
         state::AppState,
     };
+
+    struct FakeGitHubPublisher;
+
+    #[async_trait]
+    impl GitHubPublisher for FakeGitHubPublisher {
+        fn enabled(&self) -> bool {
+            true
+        }
+
+        fn owner(&self) -> Option<&str> {
+            Some("xjuIcthub")
+        }
+
+        fn repo_prefix(&self) -> &str {
+            "ict"
+        }
+
+        async fn publish(
+            &self,
+            request: GitHubPublishRequest,
+        ) -> anyhow::Result<GitHubPublishOutcome> {
+            assert_eq!(request.owner, "xjuIcthub");
+            assert!(request.repo_name.starts_with("ict-0001-"));
+            assert!(request.source_dir.join("src/main.rs").is_file());
+            Ok(GitHubPublishOutcome {
+                repo_url: format!("https://github.com/{}/{}", request.owner, request.repo_name),
+                commit_sha: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            })
+        }
+    }
 
     #[tokio::test]
     async fn health_endpoint_is_public() {
@@ -357,6 +395,135 @@ mod tests {
                         .is_some_and(|text| text.contains("视觉项目说明"))
             })
         }));
+    }
+
+    #[tokio::test]
+    async fn import_owner_can_publish_detected_source_to_private_github_repo() {
+        let identity_url = spawn_identity_service().await;
+        let state = AppState::for_test_with_identity_url(&identity_url)
+            .await
+            .expect("test state")
+            .with_github_publisher(Arc::new(FakeGitHubPublisher));
+        let job_id = "github-publication-job";
+        let result = json!({
+            "projectDraft": {
+                "name": "源码发布测试",
+                "slug": "source-publish-test",
+                "summary": "验证导入源码的私有仓库发布。",
+                "primaryCategory": "传统软件",
+                "suggestedTags": [],
+                "ownerName": null,
+                "sourceName": null,
+                "highestAward": null,
+                "status": "待确认"
+            },
+            "artifactSummary": [],
+            "normalizedResources": {
+                "sourceCode": [{
+                    "displayName": "源码包",
+                    "sourceRef": "source.zip",
+                    "evidence": "附件名称明确为源码包",
+                    "confidence": 1.0
+                }],
+                "documents": [],
+                "presentations": [],
+                "videos": [],
+                "links": []
+            },
+            "warnings": [],
+            "agent": {
+                "status": "completed",
+                "mode": "codex_exec",
+                "message": "Codex 已生成结构化草稿。"
+            },
+            "capabilities": {
+                "zipUpload": "prototype_ready",
+                "githubLink": "input_reserved",
+                "mixedFiles": "prototype_ready",
+                "codexAgent": "prototype_ready",
+                "githubPublish": "ready"
+            }
+        });
+        let agent_result = json!({
+            "resources": {
+                "sourceCode": [{"sourceRef": "source.zip"}]
+            }
+        });
+        sqlx::query(
+            "INSERT INTO import_jobs (
+                id, status, stage, progress, source_kind, source_name, analysis_engine,
+                result_json, agent_result_json, created_by_sid, completed_at
+             ) VALUES (?, 'completed', '等待确认', 100, 'file', 'source.zip',
+                'codex_exec', ?, ?, '20211010001', CURRENT_TIMESTAMP)",
+        )
+        .bind(job_id)
+        .bind(result.to_string())
+        .bind(agent_result.to_string())
+        .execute(&state.db)
+        .await
+        .expect("insert import job");
+        let source_dir = state
+            .import_root
+            .join(job_id)
+            .join("extracted/source.__contents/project/src");
+        std::fs::create_dir_all(&source_dir).expect("source directory");
+        std::fs::write(source_dir.join("main.rs"), "fn main() {}").expect("source file");
+        let app = build_router(state.clone());
+
+        let forbidden = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/import-jobs/{job_id}/github/publish"))
+                    .header(header::AUTHORIZATION, "Bearer user")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("non-member publish response");
+        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+        let queued = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/import-jobs/{job_id}/github/publish"))
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("queue publication response");
+        assert_eq!(queued.status(), StatusCode::ACCEPTED);
+
+        let options = ImportWorkerOptions::new(10, 60);
+        assert!(process_one_queued_publication(&state, &options)
+            .await
+            .expect("process publication"));
+
+        let detail = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/import-jobs/{job_id}"))
+                    .header(header::AUTHORIZATION, "Bearer member")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("publication detail response");
+        assert_eq!(detail.status(), StatusCode::OK);
+        let bytes = to_bytes(detail.into_body(), 64 * 1024)
+            .await
+            .expect("publication response body");
+        let body: Value = serde_json::from_slice(&bytes).expect("publication json");
+        assert_eq!(body["githubPublication"]["status"], "completed");
+        assert_eq!(
+            body["githubPublication"]["repoUrl"],
+            "https://github.com/xjuIcthub/ict-0001-source-publish-test"
+        );
+        assert_eq!(body["result"]["capabilities"]["githubPublish"], "ready");
     }
 
     #[tokio::test]

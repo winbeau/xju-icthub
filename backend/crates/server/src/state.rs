@@ -8,6 +8,7 @@ use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use crate::{
     auth::FeiyueIdentityClient,
     config::Config,
+    github::{GhCliPublisher, GitHubPublishConfig, GitHubPublisher},
     imports::agent::{CodexExecConfig, CodexExecRunner, ImportAgentRunner},
 };
 
@@ -22,6 +23,7 @@ pub struct AppState {
     pub ffmpeg_bin: Arc<String>,
     pub pdftoppm_bin: Arc<String>,
     pub(crate) import_agent: Arc<dyn ImportAgentRunner>,
+    pub(crate) github_publisher: Arc<dyn GitHubPublisher>,
 }
 
 impl AppState {
@@ -47,6 +49,7 @@ impl AppState {
         std::fs::create_dir_all(&config.import_root)?;
         std::fs::create_dir_all(&config.codex_home)?;
         std::fs::create_dir_all(&config.codex_runtime_root)?;
+        std::fs::create_dir_all(&config.github_runtime_root)?;
 
         let import_agent = CodexExecRunner::new(CodexExecConfig {
             enabled: config.codex_enabled,
@@ -57,6 +60,16 @@ impl AppState {
             model: config.codex_model.clone(),
             api_key_file: config.codex_api_key_file.clone(),
             timeout: std::time::Duration::from_secs(config.codex_timeout_secs.max(30)),
+        })?;
+        let github_publisher = GhCliPublisher::new(GitHubPublishConfig {
+            enabled: config.github_enabled,
+            owner: config.github_owner.clone(),
+            repo_prefix: config.github_repo_prefix.clone(),
+            token_file: config.github_token_file.clone(),
+            gh_bin: config.github_cli_bin.clone(),
+            git_bin: config.git_bin.clone(),
+            runtime_root: config.github_runtime_root.clone(),
+            timeout: std::time::Duration::from_secs(config.github_timeout_secs.max(60)),
         })?;
 
         Ok(Self {
@@ -69,6 +82,7 @@ impl AppState {
             ffmpeg_bin: Arc::new(config.ffmpeg_bin.clone()),
             pdftoppm_bin: Arc::new(config.pdftoppm_bin.clone()),
             import_agent: Arc::new(import_agent),
+            github_publisher: Arc::new(github_publisher),
         })
     }
 
@@ -95,12 +109,19 @@ impl AppState {
             ffmpeg_bin: Arc::new("ffmpeg-not-installed-for-tests".to_owned()),
             pdftoppm_bin: Arc::new("pdftoppm-not-installed-for-tests".to_owned()),
             import_agent: Arc::new(CodexExecRunner::disabled()),
+            github_publisher: Arc::new(GhCliPublisher::disabled()),
         })
     }
 
     #[cfg(test)]
     pub(crate) fn with_import_agent(mut self, runner: Arc<dyn ImportAgentRunner>) -> Self {
         self.import_agent = runner;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_github_publisher(mut self, publisher: Arc<dyn GitHubPublisher>) -> Self {
+        self.github_publisher = publisher;
         self
     }
 }

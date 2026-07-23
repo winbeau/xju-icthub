@@ -14,6 +14,7 @@ import {
   LoaderCircle,
   PackageOpen,
   Presentation,
+  ShieldCheck,
   RotateCcw,
   Workflow,
 } from 'lucide-react'
@@ -23,6 +24,7 @@ import {
   cancelImportJob,
   createImportJob,
   getImportJob,
+  publishImportGitHub,
   saveImportRefinement,
   type ImportLinkInput,
 } from '@/api/endpoints/imports'
@@ -89,7 +91,9 @@ export function ImportProjectPage() {
     enabled: Boolean(jobId),
     refetchInterval: (query) => {
       const status = query.state.data?.status
-      return status && TERMINAL_STATUSES.has(status) ? false : 900
+      const publicationStatus = query.state.data?.githubPublication?.status
+      const publishing = publicationStatus === 'queued' || publicationStatus === 'running'
+      return status && TERMINAL_STATUSES.has(status) && !publishing ? false : 900
     },
   })
   const job = jobQuery.data ?? upload.data
@@ -118,6 +122,19 @@ export function ImportProjectPage() {
       )
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : '补充提示保存失败'),
+  })
+  const publishGitHub = useMutation({
+    mutationFn: (id: string) => publishImportGitHub(id),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(['import-job', saved.id], saved)
+      toast.success(
+        saved.githubPublication?.status === 'completed'
+          ? '私有源码仓库已创建'
+          : '私有源码仓库已进入发布队列',
+      )
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : '私有源码仓库发布失败'),
   })
 
   const reset = () => {
@@ -270,7 +287,15 @@ export function ImportProjectPage() {
         </div>
       )}
 
-      {job && <JobResult job={job} loading={busy || jobQuery.isFetching} onOpenDraft={openDraft} />}
+      {job && (
+        <JobResult
+          job={job}
+          loading={busy || jobQuery.isFetching}
+          onOpenDraft={openDraft}
+          onPublishGitHub={() => publishGitHub.mutate(job.id)}
+          publishingGitHub={publishGitHub.isPending}
+        />
+      )}
       <ImportWorkflowDialog
         additionalPrompt={additionalPrompt}
         cancelling={cancel.isPending}
@@ -304,14 +329,21 @@ function JobResult({
   job,
   loading,
   onOpenDraft,
+  onPublishGitHub,
+  publishingGitHub,
 }: {
   job: ImportJob
   loading: boolean
   onOpenDraft: () => void
+  onPublishGitHub: () => void
+  publishingGitHub: boolean
 }) {
   const result = job.result
   const groupedArtifacts = useMemo(() => groupArtifacts(job.artifacts), [job.artifacts])
   const failed = job.status === 'failed'
+  const publication = job.githubPublication
+  const hasSourceCode = result?.normalizedResources.sourceCode.length
+  const publishReady = result?.capabilities.githubPublish === 'ready'
   return (
     <div className="pt-8">
       <section className="rounded-xl border border-border p-5 sm:p-6">
@@ -416,9 +448,66 @@ function JobResult({
                 <StatusRow label="多附件收集" value="已打通" />
                 <StatusRow label="Codex 分析" value={agentStatusLabel(job)} />
                 <StatusRow label="GitHub 链接" value="已预留" />
-                <StatusRow label="私有仓库发布" value="待凭据" />
+                <StatusRow
+                  label="私有仓库发布"
+                  value={githubPublicationStatus(publication?.status, publishReady)}
+                />
               </dl>
             </div>
+            {hasSourceCode ? (
+              <div className="rounded-xl border border-border p-5">
+                <div className="flex items-center gap-2">
+                  <Github className="size-4" aria-hidden />
+                  <p className="font-medium">私有源码仓库</p>
+                </div>
+                <p className="mt-2 break-all text-sm leading-6 text-text-muted">
+                  {publication
+                    ? `${publication.owner}/${publication.repoName}`
+                    : '将识别到的源码清理后，按实验室序号创建私有仓库。'}
+                </p>
+                {publication?.errorMessage && (
+                  <p className="mt-3 text-sm leading-6 text-cat-internet">
+                    {publication.errorMessage}
+                  </p>
+                )}
+                <div className="mt-4">
+                  {publication?.status === 'completed' && publication.repoUrl ? (
+                    <Button asChild variant="outline" className="w-full">
+                      <a href={publication.repoUrl} target="_blank" rel="noreferrer">
+                        <ShieldCheck aria-hidden />
+                        打开私有仓库
+                      </a>
+                    </Button>
+                  ) : (
+                    <Button
+                      className="w-full"
+                      disabled={
+                        !publishReady ||
+                        publishingGitHub ||
+                        publication?.status === 'queued' ||
+                        publication?.status === 'running'
+                      }
+                      onClick={onPublishGitHub}
+                    >
+                      {publishingGitHub ||
+                      publication?.status === 'queued' ||
+                      publication?.status === 'running' ? (
+                        <LoaderCircle className="animate-spin" aria-hidden />
+                      ) : (
+                        <Github aria-hidden />
+                      )}
+                      {publication?.status === 'failed'
+                        ? '重新尝试发布'
+                        : publication
+                          ? '正在创建私有仓库'
+                          : publishReady
+                            ? '创建私有源码仓库'
+                            : '等待管理员配置'}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ) : null}
             <div className="rounded-xl border border-border p-5">
               <p className="font-medium">任务输入</p>
               <ul className="mt-3 space-y-3">
@@ -523,6 +612,16 @@ function ArtifactIcon({ kind }: { kind: ImportArtifact['artifactKind'] }) {
 
 function editorDraft(job: ImportJob): Partial<ProjectWriteInput> {
   const draft = job.result!.projectDraft
+  const githubResource: ProjectResourceInput[] =
+    job.githubPublication?.status === 'completed' && job.githubPublication.repoUrl
+      ? [
+          {
+            type: 'github',
+            title: 'GitHub 私有源码仓库',
+            url: job.githubPublication.repoUrl,
+          },
+        ]
+      : []
   return {
     name: draft.name,
     slug: draft.slug,
@@ -533,13 +632,26 @@ function editorDraft(job: ImportJob): Partial<ProjectWriteInput> {
     sourceName: draft.sourceName ?? null,
     ownerName: draft.ownerName ?? null,
     tags: draft.suggestedTags,
-    resources: job.artifacts
-      .filter((artifact) =>
-        ['document', 'presentation', 'video', 'image', 'archive'].includes(artifact.artifactKind),
-      )
-      .slice(0, 12)
-      .map(artifactResource),
+    resources: [
+      ...githubResource,
+      ...job.artifacts
+        .filter((artifact) =>
+          ['document', 'presentation', 'video', 'image', 'archive'].includes(
+            artifact.artifactKind,
+          ),
+        )
+        .slice(0, 12)
+        .map(artifactResource),
+    ],
   }
+}
+
+function githubPublicationStatus(status: string | undefined, ready: boolean): string {
+  if (status === 'queued') return '排队中'
+  if (status === 'running') return '正在发布'
+  if (status === 'completed') return '已创建'
+  if (status === 'failed') return '可重试'
+  return ready ? '可创建' : '待凭据'
 }
 
 function artifactResource(artifact: ImportArtifact): ProjectResourceInput {

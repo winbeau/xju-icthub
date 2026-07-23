@@ -175,3 +175,12 @@ export function saveImportRefinement(id: string, prompt: string): Promise<Import
     headers: authHeaders(),
   })
 }
+
+export function publishImportGitHub(id: string): Promise<ImportJob> {
+  return request({
+    method: 'POST',
+    path: `/api/v1/import-jobs/${encodeURIComponent(id)}/github/publish`,
+    schema: ImportJobSchema,
+    headers: authHeaders(),
+  })
+}

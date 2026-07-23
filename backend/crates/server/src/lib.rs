@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod covers;
 mod error;
+mod github;
 mod imports;
 mod projects;
 mod state;

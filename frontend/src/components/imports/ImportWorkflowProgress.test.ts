@@ -42,6 +42,7 @@ function job(overrides: Partial<ImportJob> = {}): ImportJob {
       },
     ],
     agentRuns: [],
+    githubPublication: null,
     result: {
       projectDraft: {
         name: '测试项目',

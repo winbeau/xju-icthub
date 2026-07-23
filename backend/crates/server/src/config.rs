@@ -22,6 +22,14 @@ pub struct Config {
     pub codex_model: Option<String>,
     pub codex_api_key_file: Option<PathBuf>,
     pub codex_timeout_secs: u64,
+    pub github_enabled: bool,
+    pub github_owner: Option<String>,
+    pub github_repo_prefix: String,
+    pub github_token_file: Option<PathBuf>,
+    pub github_cli_bin: PathBuf,
+    pub git_bin: PathBuf,
+    pub github_runtime_root: PathBuf,
+    pub github_timeout_secs: u64,
 }
 
 impl Config {
@@ -67,6 +75,25 @@ impl Config {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
         let codex_timeout_secs = env_u64("ICTHUB_CODEX_TIMEOUT_SECS", 600)?;
+        let github_enabled = env_bool("ICTHUB_GITHUB_ENABLED", false)?;
+        let github_owner = non_empty_env("ICTHUB_GITHUB_OWNER")?;
+        let github_repo_prefix = env::var("ICTHUB_GITHUB_REPO_PREFIX")
+            .unwrap_or_else(|_| "ict".to_owned())
+            .trim()
+            .to_ascii_lowercase();
+        let github_token_file = env::var_os("ICTHUB_GITHUB_TOKEN_FILE")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+        let github_cli_bin = env::var_os("ICTHUB_GH_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("gh"));
+        let git_bin = env::var_os("ICTHUB_GIT_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("git"));
+        let github_runtime_root = env::var_os("ICTHUB_GITHUB_RUNTIME_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("data").join("github-runs"));
+        let github_timeout_secs = env_u64("ICTHUB_GITHUB_TIMEOUT_SECS", 900)?;
         if codex_enabled && (codex_base_url.is_none() || codex_model.is_none()) {
             return Err(
                 "ICTHUB_CODEX_ENABLED=true requires ICTHUB_CODEX_BASE_URL and ICTHUB_CODEX_MODEL"
@@ -76,6 +103,21 @@ impl Config {
         if codex_enabled && codex_api_key_file.is_none() && !codex_home.join("auth.json").is_file()
         {
             return Err("ICTHUB_CODEX_ENABLED=true requires either ICTHUB_CODEX_API_KEY_FILE or ICTHUB_CODEX_HOME/auth.json".into());
+        }
+        if github_enabled && (github_owner.is_none() || github_token_file.is_none()) {
+            return Err(
+                "ICTHUB_GITHUB_ENABLED=true requires ICTHUB_GITHUB_OWNER and ICTHUB_GITHUB_TOKEN_FILE"
+                    .into(),
+            );
+        }
+        if github_repo_prefix.is_empty()
+            || !github_repo_prefix
+                .chars()
+                .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == '-')
+        {
+            return Err(
+                "ICTHUB_GITHUB_REPO_PREFIX must use lowercase letters, digits, or hyphens".into(),
+            );
         }
         Ok(Self {
             bind_addr,
@@ -98,6 +140,14 @@ impl Config {
             codex_model,
             codex_api_key_file,
             codex_timeout_secs,
+            github_enabled,
+            github_owner,
+            github_repo_prefix,
+            github_token_file,
+            github_cli_bin,
+            git_bin,
+            github_runtime_root,
+            github_timeout_secs,
         })
     }
 }

@@ -317,6 +317,7 @@ registerMock('POST', '/api/v1/import-jobs', ({ body, headers }) => {
       { id: 2, eventType: 'completed', status: 'completed', stage: '等待确认', progress: 100, message: '材料整理完成，项目草稿已生成', createdAt: now },
     ],
     agentRuns: [],
+    githubPublication: null,
     result: {
       projectDraft: {
         name: projectName, slug: `import-${id.slice(0, 8)}`,
@@ -450,6 +451,33 @@ registerMock('POST', '/api/v1/import-jobs/:id/refine', ({ path, headers, body })
     id: job.events.length + 1, eventType: 'refinement_saved', status: 'completed',
     stage: job.stage, progress: 100, message: '补充提示已加入任务上下文；配置 Codex 后即可运行', createdAt: job.updatedAt,
   })
+  return job
+})
+
+registerMock('POST', '/api/v1/import-jobs/:id/github/publish', ({ path, headers }) => {
+  requireMember(headers)
+  const id = decodeURIComponent(path.split('/').at(-3) ?? '')
+  const job = mockImportJobs[id]
+  if (!job) throw new ApiError('导入任务不存在', 404, path)
+  if (!job.result?.normalizedResources.sourceCode.length) {
+    throw new ApiError('Codex 尚未识别出可发布的源码目录', 409, path)
+  }
+  job.githubPublication = {
+    id: crypto.randomUUID(),
+    owner: 'xjuIcthub',
+    repoNumber: 1,
+    repoName: `ict-0001-${job.result.projectDraft.slug}`,
+    repoUrl: null,
+    sourceRef: job.result.normalizedResources.sourceCode[0]!.sourceRef,
+    status: 'queued',
+    errorMessage: null,
+    commitSha: null,
+    attemptCount: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    startedAt: null,
+    completedAt: null,
+  }
   return job
 })
 

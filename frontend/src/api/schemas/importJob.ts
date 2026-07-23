@@ -70,6 +70,23 @@ export const AgentRunSchema = z.object({
   createdAt: z.string(),
 })
 
+export const GitHubPublicationSchema = z.object({
+  id: z.string(),
+  owner: z.string(),
+  repoNumber: z.number().int().positive(),
+  repoName: z.string(),
+  repoUrl: z.string().url().nullable(),
+  sourceRef: z.string(),
+  status: z.enum(['queued', 'running', 'completed', 'failed']),
+  errorMessage: z.string().nullable(),
+  commitSha: z.string().nullable(),
+  attemptCount: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  startedAt: z.string().nullable(),
+  completedAt: z.string().nullable(),
+})
+
 export const ImportAnalysisSchema = z.object({
   projectDraft: z.object({
     name: z.string(),
@@ -125,6 +142,7 @@ export const ImportJobSchema = z.object({
   artifacts: z.array(ImportArtifactSchema),
   events: z.array(ImportJobEventSchema),
   agentRuns: z.array(AgentRunSchema),
+  githubPublication: GitHubPublicationSchema.nullable(),
   result: ImportAnalysisSchema.nullable(),
 })
 
