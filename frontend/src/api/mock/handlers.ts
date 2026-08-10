@@ -18,8 +18,8 @@ function mockUser(sid: string): User {
   const member = superadmin || sid !== '20211010000'
   return {
     sid,
-    name: superadmin ? '超级管理员' : member ? '实验室成员' : '飞跃用户',
-    nickname: superadmin ? '超级管理员' : member ? 'ICT 成员' : '飞跃用户',
+    name: superadmin ? '超级管理员' : member ? '项目成员' : '普通用户',
+    nickname: superadmin ? '超级管理员' : member ? '项目成员' : '普通用户',
     preferredName: null,
     avatar: null,
     avatarThumb: null,
@@ -58,7 +58,7 @@ let mockTags: TagDefinition[] = [
   ['feature-ai-enhanced', 'AI增强', '特征'], ['feature-non-ai', '非AI', '特征'], ['feature-open', '开源项目', '特征'],
   ['domain-campus', '校园服务', '领域'], ['domain-education', '教育', '领域'], ['domain-agriculture', '农业', '领域'],
   ['domain-medical', '医疗', '领域'], ['domain-tourism', '文旅', '领域'], ['domain-industry', '工业', '领域'], ['domain-research', '科研辅助', '领域'],
-  ['source-competition', '比赛项目', '来源'], ['source-lab', '实验室建设', '来源'], ['source-course', '课程项目', '来源'],
+  ['source-competition', '比赛项目', '来源'], ['source-lab', '工具建设', '来源'], ['source-course', '课程项目', '来源'],
   ['source-tool', '日常工具', '来源'], ['source-personal', '个人探索', '来源'], ['source-service', '对外服务', '来源'],
 ].map(([id, name, groupName], index) => ({ id: id!, name: name!, groupName: groupName!, color: null, sortOrder: index, isActive: true, mergedIntoId: null }))
 
@@ -70,7 +70,7 @@ function requireMember(headers: Headers): User {
   if (!sid) throw new ApiError('请先登录', 401, '/api/v1/projects')
   const user = mockUser(sid)
   if (!user.isLabMember && !user.isSuperAdmin) {
-    throw new ApiError('当前账号尚未开通实验室权限，请联系管理员', 403, '/api/v1/projects')
+    throw new ApiError('当前账号尚未开通项目库权限，请联系管理员', 403, '/api/v1/projects')
   }
   return user
 }
@@ -345,7 +345,7 @@ function mockExplicitTags(prompt: string): string[] {
     '人工智能应用', 'LLM/Agent', '计算机视觉', 'NLP', '物联网', '嵌入式',
     '机器人', 'Web', '移动端', '3D/VR', '软硬结合', 'AI核心', 'AI增强',
     '非AI', '开源项目', '校园服务', '教育', '农业', '医疗', '文旅', '工业',
-    '科研辅助', '比赛项目', '实验室建设', '课程项目', '日常工具', '个人探索',
+    '科研辅助', '比赛项目', '工具建设', '课程项目', '日常工具', '个人探索',
     '对外服务',
   ])
   const value = mockExplicitField(prompt, ['标签', '项目标签'])

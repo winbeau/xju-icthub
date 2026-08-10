@@ -1,4 +1,4 @@
-import { createBrowserRouter } from 'react-router-dom'
+import { createBrowserRouter, Outlet } from 'react-router-dom'
 import { AppShell } from '@/components/layout/AppShell'
 import { RequireAccess } from '@/components/layout/RequireAccess'
 import { AdminProjectsPage } from '@/pages/AdminProjectsPage'
@@ -15,20 +15,25 @@ import { TagManagementPage } from '@/pages/TagManagementPage'
 export const router: ReturnType<typeof createBrowserRouter> = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
   {
-    element: (
-      <RequireAccess requireLabMember>
-        <AppShell />
-      </RequireAccess>
-    ),
+    element: <AppShell />,
     children: [
       { path: '/', element: <HomePage /> },
-      { path: '/projects', element: <ProjectsPage /> },
-      { path: '/projects/:slug', element: <ProjectDetailPage /> },
-      { path: '/admin/projects', element: <AdminProjectsPage /> },
-      { path: '/admin/import', element: <ImportProjectPage /> },
-      { path: '/admin/projects/new', element: <ProjectCreatePage /> },
-      { path: '/admin/projects/:slug/edit', element: <ProjectEditorPage /> },
-      { path: '/admin/tags', element: <TagManagementPage /> },
+      {
+        element: (
+          <RequireAccess requireLabMember>
+            <Outlet />
+          </RequireAccess>
+        ),
+        children: [
+          { path: '/projects', element: <ProjectsPage /> },
+          { path: '/projects/:slug', element: <ProjectDetailPage /> },
+          { path: '/admin/projects', element: <AdminProjectsPage /> },
+          { path: '/admin/import', element: <ImportProjectPage /> },
+          { path: '/admin/projects/new', element: <ProjectCreatePage /> },
+          { path: '/admin/projects/:slug/edit', element: <ProjectEditorPage /> },
+          { path: '/admin/tags', element: <TagManagementPage /> },
+        ],
+      },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

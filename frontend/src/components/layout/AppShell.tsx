@@ -9,6 +9,7 @@ export function AppShell() {
   const mode = useAuthStore((state) => state.mode)
   const logout = useAuthStore((state) => state.logout)
   const canManage = canManageProjects(user)
+  const currentYear = new Date().getFullYear()
 
   return (
     <div className="flex min-h-screen flex-col bg-bg text-text">
@@ -18,10 +19,20 @@ export function AppShell() {
             to="/"
             className="shrink-0 font-serif text-lg font-semibold tracking-[-0.01em] text-text"
           >
-            新疆大学 ICT&amp;软开实验室
+            Winbeau
           </Link>
 
-          <nav aria-label="实验室全局导航预留" className="min-w-0 flex-1" data-global-nav-slot />
+          <nav
+            aria-label="主导航"
+            className="hidden min-w-0 flex-1 items-center gap-5 text-sm text-text-muted sm:flex"
+          >
+            <Link className="transition-colors hover:text-text" to="/">
+              首页
+            </Link>
+            <Link className="transition-colors hover:text-text" to="/projects">
+              项目
+            </Link>
+          </nav>
 
           <div className="flex shrink-0 items-center gap-2">
             {canManage && (
@@ -61,8 +72,8 @@ export function AppShell() {
 
       <footer className="border-t border-border">
         <div className="mx-auto flex max-w-6xl flex-col gap-1 px-5 py-7 text-sm text-text-faint sm:flex-row sm:items-center sm:justify-between sm:px-8">
-          <span>新疆大学 ICT&amp;软开实验室</span>
-          <span>ICTHub · 项目资源库</span>
+          <span>© {currentYear} Winbeau</span>
+          <span>Personal website · icthub.top</span>
         </div>
       </footer>
     </div>

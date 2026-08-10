@@ -22,12 +22,12 @@ export function ProjectsPage() {
       <section className="grid gap-8 border-b border-border pb-9 md:grid-cols-[minmax(0,1fr)_minmax(280px,380px)] md:items-end">
         <div className="min-w-0">
           <p className="text-sm font-medium uppercase tracking-[0.14em] text-text-faint">
-            ICTHub / Projects
+            Winbeau / Projects
           </p>
           <h1 className="mt-3 font-serif text-4xl font-semibold tracking-[-0.03em] sm:text-5xl">
-            实验室项目集
+            我的项目集
           </h1>
-          <p className="mt-4 text-lg text-text-muted">让想法、作品与研究持续生长。</p>
+          <p className="mt-4 text-lg text-text-muted">收集正在构建、持续维护与已经完成的作品。</p>
         </div>
         <label className="block w-full min-w-0">
           <span className="mb-2 block text-base font-medium text-text-muted">搜索项目</span>

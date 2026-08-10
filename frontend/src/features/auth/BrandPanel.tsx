@@ -25,7 +25,7 @@ export function BrandPanel() {
     <aside
       className="relative hidden select-none overflow-hidden lg:col-span-7 lg:flex lg:flex-col lg:justify-center lg:px-20 lg:py-16 xl:px-28"
       style={backgroundStyle}
-      aria-label="ICTHub 项目库简介"
+      aria-label="Winbeau 项目库简介"
     >
       <header>
         <Link
@@ -33,7 +33,7 @@ export function BrandPanel() {
           className="inline-flex items-center gap-2 font-serif text-lg font-semibold"
         >
           <FolderKanban size={20} strokeWidth={1.75} aria-hidden />
-          ICTHub / Projects
+          Winbeau / Projects
         </Link>
         <h2 className="mt-9 max-w-[14ch] font-serif text-[46px] font-semibold leading-[1.05] tracking-[-0.025em] xl:text-[56px]">
           把想法，
@@ -41,7 +41,7 @@ export function BrandPanel() {
           做成作品。
         </h2>
         <p className="mt-4 max-w-[42ch] text-base leading-7 text-text-muted">
-          新疆大学 ICT&amp;软开实验室的项目与积累。
+          我的项目、实验与长期积累。
         </p>
       </header>
 
@@ -81,7 +81,7 @@ export function BrandPanel() {
         })}
       </div>
 
-      <p className="mt-7 text-xs text-text-faint">飞跃统一账号 · ICTHub 独立项目数据</p>
+      <p className="mt-7 text-xs text-text-faint">个人账号 · 独立项目数据</p>
     </aside>
   )
 }

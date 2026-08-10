@@ -37,7 +37,7 @@ export function LoginForm() {
     try {
       const user = await login(values.sid, values.password)
       if (!canAccessIctHub(user)) {
-        toast.error('当前账号尚未开通实验室权限，请联系管理员')
+        toast.error('当前账号尚未开通项目库权限，请联系管理员')
         navigate(from, { replace: true })
         return
       }
@@ -52,10 +52,10 @@ export function LoginForm() {
 
   return (
     <div className="w-full max-w-[408px] rounded-lg border border-border bg-bg p-8 shadow-card sm:p-10">
-      <p className="text-sm font-medium uppercase tracking-[0.16em] text-text-faint">ICTHub</p>
+      <p className="text-sm font-medium uppercase tracking-[0.16em] text-text-faint">WINBEAU</p>
       <h1 className="mt-3 font-serif text-[32px] font-semibold leading-[1.15] text-text">登录</h1>
       <p className="mt-2 text-base leading-[1.7] text-text-muted">
-        使用已有飞跃账号进入实验室项目库。
+        使用已有账号进入我的项目库。
       </p>
 
       <form className="mt-8 space-y-4" noValidate onSubmit={onSubmit}>

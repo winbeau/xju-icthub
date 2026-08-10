@@ -560,7 +560,7 @@ function JobResult({
                 <p className="mt-2 break-all text-sm leading-6 text-text-muted">
                   {publication
                     ? `${publication.owner}/${publication.repoName}`
-                    : '将识别到的源码清理后，按实验室序号创建私有仓库。'}
+                    : '将识别到的源码清理后，按项目序号创建私有仓库。'}
                 </p>
                 {publication?.errorMessage && (
                   <p className="mt-3 text-sm leading-6 text-cat-internet">

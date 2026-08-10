@@ -10,7 +10,7 @@ const cover = {
 export const PROJECT_FIXTURES: readonly ProjectDetail[] = [
   {
     id: '1', slug: 'multimodal-inspection-robot', primaryCategory: '智能硬件', classificationStatus: 'classified',
-    name: '多模态巡检机器人', summary: '面向实验室和机房的视觉巡检、异常识别与远程处置系统。',
+    name: '多模态巡检机器人', summary: '面向办公空间和机房的视觉巡检、异常识别与远程处置系统。',
     highestAward: '国创赛省赛银奖', status: '研发中', critique: '现场稳定性决定它能否真正投入使用。',
     ownerName: '机器人项目组', sourceName: '2023 届项目组', tags: ['机器人', '计算机视觉', '国创赛（互联网+）'],
     resources: [
@@ -39,12 +39,12 @@ export const PROJECT_FIXTURES: readonly ProjectDetail[] = [
     ...cover, coverTitle: '边缘检测', coverSubtitle: '轻量模型精度与延迟研究', coverKeywords: ['计算机视觉', '嵌入式', '科研辅助'], coverTone: 'emerald',
   },
   {
-    id: '4', slug: 'lab-device-booking', primaryCategory: '传统软件', classificationStatus: 'classified',
-    name: '实验室设备预约系统', summary: '管理设备档案、预约冲突、借用交接和二维码盘点。',
+    id: '4', slug: 'device-booking', primaryCategory: '传统软件', classificationStatus: 'classified',
+    name: '设备预约管理系统', summary: '管理设备档案、预约冲突、借用交接和二维码盘点。',
     highestAward: null, status: '研发中', critique: '清晰的责任链就是最重要的体验。',
-    ownerName: '实验室运维组', sourceName: '内部需求', tags: ['Web', '校园服务', '实验室建设'],
+    ownerName: '个人维护', sourceName: '实际需求', tags: ['Web', '日常工具', '个人探索'],
     resources: [{ id: 'r4', type: 'github', title: 'GitHub 仓库', url: 'https://github.com/example/booking' }],
-    ...cover, coverTitle: '便捷预约', coverSubtitle: '实验室设备借用与盘点', coverKeywords: ['Web', '校园服务', '实验室建设'], coverTone: 'slate',
+    ...cover, coverTitle: '便捷预约', coverSubtitle: '设备借用与盘点', coverKeywords: ['Web', '日常工具', '个人探索'], coverTone: 'slate',
   },
   {
     id: '5', slug: 'intangible-heritage-showcase', primaryCategory: '数字媒体', classificationStatus: 'classified',

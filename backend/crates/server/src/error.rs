@@ -11,7 +11,7 @@ use thiserror::Error;
 pub enum AppError {
     #[error("请先登录")]
     Unauthorized,
-    #[error("当前账号尚未开通实验室权限，请联系管理员")]
+    #[error("当前账号尚未开通项目库权限，请联系管理员")]
     Forbidden,
     #[error("not found")]
     NotFound,

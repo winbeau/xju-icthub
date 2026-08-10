@@ -18,11 +18,11 @@ export function AccessDeniedPage() {
       <section className="w-full max-w-xl rounded-lg border border-border bg-bg p-8 text-center shadow-card sm:p-12">
         <ShieldX className="mx-auto size-10 text-text-muted" strokeWidth={1.6} aria-hidden />
         <p className="mt-6 text-sm font-medium uppercase tracking-[0.16em] text-text-faint">
-          ICTHub / Restricted
+          Winbeau / Restricted
         </p>
         <h1 className="mt-3 font-serif text-3xl font-semibold tracking-[-0.02em]">暂无访问权限</h1>
         <p className="mx-auto mt-4 max-w-md text-lg leading-8 text-text-muted">
-          当前账号尚未开通实验室权限，请联系管理员
+          当前账号尚未开通项目库权限，请联系管理员
         </p>
         {user && (
           <p className="mt-3 text-sm text-text-faint">

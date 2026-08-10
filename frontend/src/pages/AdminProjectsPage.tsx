@@ -30,10 +30,10 @@ export function AdminProjectsPage() {
       <div className="flex flex-col gap-5 border-b border-border pb-8 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-medium uppercase tracking-[0.16em] text-text-faint">
-            ICTHub / Manage
+            Winbeau / Manage
           </p>
           <h1 className="mt-3 font-serif text-3xl font-semibold tracking-[-0.02em]">项目管理</h1>
-          <p className="mt-2 text-base text-text-muted">上传、修订和归档实验室项目。</p>
+          <p className="mt-2 text-base text-text-muted">上传、修订和归档个人项目。</p>
         </div>
         <div className="flex gap-2">
           {canManageTags(user) && <Button asChild variant="ghost"><Link to="/admin/tags">标签管理</Link></Button>}
